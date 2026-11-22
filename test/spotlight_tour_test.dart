@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
@@ -233,5 +235,283 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
     expect(find.text('1 of 2'), findsNothing);
+  });
+
+  testWidgets('Next runs the step action and waits for a late target',
+      (tester) async {
+    final key0 = GlobalKey();
+    final lateKey = GlobalKey();
+    final showLate = ValueNotifier<bool>(false);
+    final events = <String>[];
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: key0,
+        title: 'الخطوة الأولى',
+        description: 'وصف أول',
+        onNext: () {
+          events.add('onNext');
+          // The target of the next step only appears after the action's
+          // effect lands (like a sheet sliding in).
+          Future<void>.delayed(const Duration(milliseconds: 200),
+              () => showLate.value = true);
+        },
+      ),
+      TourStep(targetKey: lateKey, title: 'الخطوة المتأخرة', description: 'ظهرت لاحقاً'),
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: SpotlightTour(
+          controller: controller,
+          child: Scaffold(
+            body: ValueListenableBuilder<bool>(
+              valueListenable: showLate,
+              builder: (context, value, _) => Column(
+                children: [
+                  Container(key: key0, height: 60, color: Colors.blue),
+                  const Spacer(),
+                  if (value)
+                    Container(key: lateKey, height: 60, color: Colors.red),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('الخطوة الأولى'), findsOneWidget);
+
+    await tester.tap(find.text('التالي'));
+    // The action runs synchronously on press, before any animation frame.
+    expect(events, ['onNext']);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250)); // card exits
+    await tester.pump(const Duration(milliseconds: 100)); // widget appears
+    await tester.pump(const Duration(milliseconds: 500)); // morph + enter
+
+    expect(find.text('الخطوة المتأخرة'), findsOneWidget);
+
+    // The spotlight resolved onto the late-appearing widget.
+    final painter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    final lateBox = lateKey.currentContext!.findRenderObject()! as RenderBox;
+    final lateCenter = lateBox.localToGlobal(lateBox.size.center(Offset.zero));
+    expect(painter.targetPath, isNotNull);
+    expect(painter.targetPath!.contains(lateCenter), isTrue);
+  });
+
+  testWidgets('requireInteraction passes the real gesture through and waits',
+      (tester) async {
+    final btnKey = GlobalKey();
+    var taps = 0;
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: btnKey,
+        title: 'جرّب بنفسك',
+        description: 'اضغط الزر الحقيقي',
+        interaction: TourTargetInteraction.tap,
+        requireInteraction: true,
+      ),
+      const TourStep(title: 'أحسنت', description: 'تم تنفيذ الإجراء'),
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: SpotlightTour(
+          controller: controller,
+          child: Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                key: btnKey,
+                onPressed: () => taps++,
+                child: const Text('زر التطبيق'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // No Next button on this step: the hint replaces it.
+    expect(find.text('نفّذ الإجراء في التطبيق للمتابعة'), findsOneWidget);
+    expect(find.text('التالي'), findsNothing);
+
+    // The tap passes through the dimmed backdrop inside the spotlight and
+    // reaches the app's real button; the tour does not advance by itself.
+    await tester.tap(find.byKey(btnKey));
+    await tester.pump();
+    expect(taps, 1);
+    expect(controller.index, 0);
+
+    // The app's own handler advances the tour.
+    controller.next();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(find.text('أحسنت'), findsOneWidget);
+  });
+
+  testWidgets('backdrop still blocks touches outside the spotlight',
+      (tester) async {
+    final btnKey = GlobalKey();
+    var taps = 0;
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: btnKey,
+        title: 'هدف صغير',
+        description: 'اللمس خارج الإطار محجوب',
+        interaction: TourTargetInteraction.tap,
+      ),
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: SpotlightTour(
+          controller: controller,
+          child: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: ElevatedButton(
+                key: btnKey,
+                onPressed: () => taps++,
+                child: const Text('زر'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // A point far from the small target stays blocked.
+    await tester.tapAt(const Offset(700, 550));
+    await tester.pump();
+    expect(taps, 0);
+  });
+
+  testWidgets('overlay rises above a modal sheet and highlights inside it',
+      (tester) async {
+    final key0 = GlobalKey();
+    final sheetItemKey = GlobalKey();
+    final navKey = GlobalKey<NavigatorState>();
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: key0,
+        title: 'افتح الخيارات',
+        description: 'التالي يفتح النافذة',
+        onNext: () => unawaited(showModalBottomSheet<void>(
+          context: navKey.currentContext!,
+          builder: (_) => Directionality(
+            textDirection: TextDirection.rtl,
+            child: SizedBox(
+              height: 220,
+              child: Center(
+                child: Container(
+                  key: sheetItemKey,
+                  padding: const EdgeInsets.all(12),
+                  child: const Text('داخل النافذة'),
+                ),
+              ),
+            ),
+          ),
+        )),
+      ),
+      TourStep(
+          targetKey: sheetItemKey,
+          title: 'عنصر النافذة',
+          description: 'مُبرز داخل النافذة'),
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      navigatorKey: navKey,
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: SpotlightTour(
+          controller: controller,
+          child: Scaffold(
+            body: Container(key: key0, height: 60, color: Colors.blue),
+          ),
+        ),
+      ),
+    ));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300)); // sheet slides in
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // The sheet is open and the tour continued onto a step targeting a
+    // widget inside it.
+    expect(find.text('داخل النافذة'), findsOneWidget);
+    expect(find.text('عنصر النافذة'), findsOneWidget);
+
+    final painter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    final itemBox =
+        sheetItemKey.currentContext!.findRenderObject()! as RenderBox;
+    final itemCenter =
+        itemBox.localToGlobal(itemBox.size.center(Offset.zero));
+    expect(painter.targetPath, isNotNull);
+    expect(painter.targetPath!.contains(itemCenter), isTrue);
+  });
+
+  testWidgets('reentrant Next taps are ignored while an action runs',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    var actionRuns = 0;
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: keys[0],
+        title: 'الخطوة الأولى',
+        description: 'وصف أول',
+        onNext: () async {
+          actionRuns++;
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        },
+      ),
+      TourStep(targetKey: keys[1], title: 'الخطوة الثانية', description: 'وصف ثان'),
+      TourStep(targetKey: keys[2], title: 'الخطوة الثالثة', description: 'وصف ثالث'),
+    ]);
+
+    await tester.pumpWidget(buildApp(controller, keys: keys));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // Two rapid advances: the second lands while the action is still
+    // running. The button is disabled (spinner replaces the label) and a
+    // programmatic reentrant call is ignored too.
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    expect(find.text('التالي'), findsNothing); // spinner while busy
+    await tester.tap(find.byType(FilledButton), warnIfMissed: false);
+    controller.next(); // reentrant programmatic call: must be ignored
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500)); // action completes
+    await tester.pump(const Duration(milliseconds: 900)); // transition done
+
+    expect(actionRuns, 1);
+    expect(controller.index, 1);
+    expect(find.text('الخطوة الثانية'), findsOneWidget);
   });
 }

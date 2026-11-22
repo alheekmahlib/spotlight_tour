@@ -78,6 +78,12 @@ class _SpotlightTourState extends State<SpotlightTour>
   /// index while the exit/enter animation runs).
   int _displayedIndex = 0;
 
+  /// True while a step action / transition pipeline is running.
+  bool _transitioning = false;
+
+  /// True once the exit animation has started (skip/finish).
+  bool _closing = false;
+
   /// Current animated spotlight bounds (null = no cutout on this step).
   _SpotTarget? _target;
   RRect? _morphFrom;
@@ -120,20 +126,22 @@ class _SpotlightTourState extends State<SpotlightTour>
       case TourStatus.running:
         if (_entry == null) {
           _show();
-        } else if (c.index != _displayedIndex) {
-          _transitionToStep(c.index);
+        } else if (c.index != _displayedIndex && !_transitioning) {
+          // Backward moves (and restarts from a higher index) must not run
+          // the leaving step's onNext action.
+          unawaited(_goToStep(c.index, forward: c.index > _displayedIndex));
         }
       case TourStatus.closing:
-        if (_entry != null) _dismiss();
+        if (_entry != null && !_closing) unawaited(_closeFlow());
       case TourStatus.idle:
         break;
     }
   }
 
   void _show() {
+    _closing = false;
     _textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
     _displayedIndex = widget.controller.index;
-    _target = _resolveTarget(widget.controller.currentStep);
     _entry = OverlayEntry(builder: _buildOverlay);
     Overlay.of(context).insert(_entry!);
 
@@ -143,6 +151,27 @@ class _SpotlightTourState extends State<SpotlightTour>
     _scrimCtrl.forward(from: 0);
     _cardCtrl.forward(from: 0);
     _pulseCtrl.repeat();
+
+    // Resolve the first target after running the step's onEnter hook, the
+    // same pipeline used between steps (minus the exit animation).
+    unawaited(_goToStep(_displayedIndex, forward: true, initial: true));
+  }
+
+  /// Runs the last step's [TourStep.onNext] when the tour ended via its Done
+  /// button (not via skip), then animates out.
+  Future<void> _closeFlow() async {
+    _closing = true;
+    final c = widget.controller;
+    if (c.finishedByConfirm && _displayedIndex < c.steps.length) {
+      try {
+        await c.steps[_displayedIndex].onNext?.call();
+      } catch (_) {
+        // A failing cleanup action must not trap the tour on screen.
+      }
+      if (!mounted || c.status != TourStatus.closing) return;
+      _raiseEntry();
+    }
+    await _dismiss();
   }
 
   Future<void> _dismiss() async {
@@ -158,40 +187,128 @@ class _SpotlightTourState extends State<SpotlightTour>
     if (!mounted) return;
     _entry?.remove();
     _entry = null;
+    _closing = false;
     widget.controller.markClosed();
   }
 
-  Future<void> _transitionToStep(int index) async {
-    final fromStep = widget.controller.steps[_displayedIndex];
-    final toStep = widget.controller.steps[index];
-    final fromTarget = _resolveTarget(fromStep);
-    final toTarget = _resolveTarget(toStep);
+  /// The full step-to-step pipeline:
+  ///
+  /// 1. capture the current target's bounds (before any action changes it)
+  /// 2. forward moves: run the leaving step's [TourStep.onNext] and wait for
+  ///    it — this is what makes the tour *do* things (open the app's sheet,
+  ///    turn the page, ...)
+  /// 3. card slides out; the entering step's [TourStep.onEnter] runs and is
+  ///    awaited, so UI it prepares exists before measurement
+  /// 4. the overlay re-raises itself above any route (sheet/dialog) those
+  ///    actions pushed, then the new target is resolved, retrying every
+  ///    frame until [TourStep.targetTimeout] for targets that appear late
+  /// 5. spotlight glides over while the new card slides in.
+  ///
+  /// While this runs, the controller is busy: Next/Previous/Start calls are
+  /// ignored, so double taps and reentrant calls from app handlers cannot
+  /// interleave transitions.
+  Future<void> _goToStep(int index,
+      {required bool forward, bool initial = false}) async {
+    final c = widget.controller;
+    if (_transitioning) return;
+    _transitioning = true;
+    c.setBusy(true);
+    try {
+      final fromTarget = _resolveTarget(c.steps[_displayedIndex]);
 
-    // 1. Card slides down and fades out.
-    _cardCtrl.duration = _theme.cardExitDuration;
-    await _cardCtrl.reverse().orCancel.catchError((_) {});
+      bool aborted() =>
+          !mounted ||
+          c.status != TourStatus.running ||
+          c.index != index;
 
-    if (!mounted) return;
+      if (forward && !initial) {
+        try {
+          await c.steps[_displayedIndex].onNext?.call();
+        } catch (_) {
+          // A failing action must not wedge the tour: continue without it.
+        }
+        if (aborted()) return;
+        _raiseEntry();
 
-    // 2. Swap content, glide the spotlight to the new target while the new
-    // card slides up and fades in, slightly overlapping the morph.
-    //
-    // The morph animates the bounding shape between steps. When the
-    // destination is a text-lines contour, the precise stepped outline is
-    // drawn as soon as the glide ends (there is no meaningful lerp between
-    // contours with different line counts).
-    _displayedIndex = index;
-    _target = toTarget;
-    _morphFrom = fromTarget?.bounds;
-    _morphTo = toTarget?.bounds;
-    _morphCtrl.duration = _theme.spotlightMorphDuration;
-    _entry?.markNeedsBuild();
-    unawaited(_morphCtrl.forward(from: 0).then((_) {
-      _morphFrom = null;
-      _morphTo = null;
-    }));
-    _cardCtrl.duration = _theme.cardEnterDuration;
-    unawaited(_cardCtrl.forward(from: 0));
+        _cardCtrl.duration = _theme.cardExitDuration;
+        try {
+          await _cardCtrl.reverse().orCancel;
+        } on TickerCanceled {
+          return;
+        }
+        if (aborted()) return;
+      }
+
+      _displayedIndex = index;
+      final toStep = c.steps[index];
+      try {
+        await toStep.onEnter?.call();
+      } catch (_) {
+        // Same policy as onNext above.
+      }
+      if (aborted()) return;
+      _raiseEntry();
+
+      final toTarget = await _resolveTargetWithWait(toStep);
+      if (aborted()) return;
+
+      _target = toTarget;
+      if (!initial) {
+        // The morph animates the bounding shape between steps. When the
+        // destination is a text-lines contour, the precise stepped outline
+        // is drawn as soon as the glide ends (there is no meaningful lerp
+        // between contours with different line counts).
+        _morphFrom = fromTarget?.bounds;
+        _morphTo = toTarget?.bounds;
+        _morphCtrl.duration = _theme.spotlightMorphDuration;
+        _entry?.markNeedsBuild();
+        unawaited(_morphCtrl.forward(from: 0).then((_) {
+          _morphFrom = null;
+          _morphTo = null;
+          if (mounted) _entry?.markNeedsBuild();
+        }));
+        _cardCtrl.duration = _theme.cardEnterDuration;
+        unawaited(_cardCtrl.forward(from: 0));
+      } else {
+        _entry?.markNeedsBuild();
+      }
+    } finally {
+      _transitioning = false;
+      if (mounted && c.status == TourStatus.running) {
+        c.setBusy(false);
+      }
+    }
+  }
+
+  /// Re-inserts the overlay entry on top of the [Overlay]'s stack.
+  ///
+  /// Routes pushed by step actions (a modal bottom sheet with the verse
+  /// options, a dialog, ...) land *above* entries inserted earlier, which
+  /// would hide the tour. Removing and re-inserting puts the tour back on
+  /// top so its scrim and card cover the sheet and the sheet's widgets can
+  /// be highlighted by key, exactly like widgets on the page below.
+  void _raiseEntry() {
+    final entry = _entry;
+    if (entry == null || !mounted) return;
+    entry.remove();
+    Overlay.of(context).insert(entry);
+  }
+
+  /// Like [_resolveTarget], but for steps whose target may not exist yet
+  /// (created by an awaited action, a sheet still sliding in, a page still
+  /// turning): retries every frame until the target has laid-out bounds or
+  /// [TourStep.targetTimeout] elapses.
+  Future<_SpotTarget?> _resolveTargetWithWait(TourStep step) async {
+    var target = _resolveTarget(step);
+    if (target != null || step.targetKey == null) return target;
+    final timeout = step.targetTimeout ?? const Duration(milliseconds: 1200);
+    final deadline = DateTime.now().add(timeout);
+    while (target == null && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 32));
+      if (!mounted) return null;
+      target = _resolveTarget(step);
+    }
+    return target;
   }
 
   /// Resolves the current outline of a step's target in overlay coordinates.
@@ -394,8 +511,11 @@ class _SpotlightTourState extends State<SpotlightTour>
                   // Backdrop + highlight border + glow.
                   Positioned.fill(
                     child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: widget.barrierDismissible ? c.skip : () {},
+                      // deferredToChild + the painter's hitTest: gestures
+                      // inside the spotlight pass through to the app below
+                      // on interactive steps, everything else is absorbed.
+                      behavior: HitTestBehavior.deferToChild,
+                      onTap: widget.barrierDismissible ? c.skip : null,
                       child: CustomPaint(
                         painter: SpotlightPainter(
                           scrimColor: theme.scrimColor,
@@ -404,6 +524,8 @@ class _SpotlightTourState extends State<SpotlightTour>
                           borderWidth: theme.borderWidth,
                           glowSigma: theme.glowSigma,
                           scrimOpacity: _scrimCtrl.value,
+                          tapThroughTarget: !_transitioning &&
+                              step.interaction != TourTargetInteraction.none,
                         ),
                       ),
                     ),

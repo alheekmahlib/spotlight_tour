@@ -7,6 +7,7 @@ class TourLabels {
     this.next = 'التالي',
     this.done = 'تم',
     this.start = 'ابدأ الجولة',
+    this.interactionHint = 'نفّذ الإجراء في التطبيق للمتابعة',
     this.counter = _defaultCounter,
   });
 
@@ -24,6 +25,11 @@ class TourLabels {
 
   /// Primary button on a target-less first step (intro).
   final String start;
+
+  /// Hint shown instead of the primary button on steps with
+  /// `TourStep.requireInteraction`, telling the user to perform the real
+  /// gesture in the app.
+  final String interactionHint;
 
   /// Builds the counter text, e.g. "5 من 25".
   final String Function(int current, int total) counter;

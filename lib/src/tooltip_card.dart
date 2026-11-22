@@ -71,38 +71,100 @@ class TourTooltipCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(step.description, style: theme.bodyStyle, textAlign: TextAlign.start),
           const SizedBox(height: 18),
-          Row(
-            children: [
-              if (index > 0)
-                Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 12),
-                  child: InkWell(
-                    onTap: controller.previous,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                      child: Text(labels.previous, style: theme.previousStyle),
-                    ),
-                  ),
-                ),
-              Expanded(
-                child: SizedBox(
-                  height: theme.primaryButtonHeight,
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: theme.accentColor,
-                      foregroundColor: theme.onAccentColor,
-                      shape: RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(theme.primaryButtonHeight / 2),
+          // Rebuilds on controller notifications so the busy state (a step
+          // action running, or the transition animation) disables the
+          // buttons while the tour moves.
+          ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) {
+              final busy = controller.isBusy;
+              return Row(
+                children: [
+                  if (index > 0)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(end: 12),
+                      child: InkWell(
+                        onTap: busy ? null : controller.previous,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 10),
+                          child: Text(labels.previous, style: theme.previousStyle),
+                        ),
                       ),
                     ),
-                    onPressed: controller.next,
-                    child: Text(primaryLabel, style: theme.buttonTextStyle),
+                  Expanded(
+                    child: step.requireInteraction
+                        ? _InteractionHint(
+                            theme: theme,
+                            text: step.interactionHint ?? labels.interactionHint,
+                          )
+                        : SizedBox(
+                            height: theme.primaryButtonHeight,
+                            child: FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: theme.accentColor,
+                                foregroundColor: theme.onAccentColor,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                      theme.primaryButtonHeight / 2),
+                                ),
+                              ),
+                              onPressed: busy ? null : controller.next,
+                              child: busy
+                                  ? SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: theme.onAccentColor,
+                                      ),
+                                    )
+                                  : Text(primaryLabel,
+                                      style: theme.buttonTextStyle),
+                            ),
+                          ),
                   ),
-                ),
-              ),
-            ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The centered hint that replaces the primary button on
+/// `TourStep.requireInteraction` steps: the user must perform the real
+/// gesture in the app to continue.
+class _InteractionHint extends StatelessWidget {
+  const _InteractionHint({required this.theme, required this.text});
+
+  final SpotlightTourTheme theme;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: theme.primaryButtonHeight,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        border: Border.all(
+            color: theme.accentColor.withValues(alpha: 0.5), width: 1),
+        borderRadius: BorderRadius.circular(theme.primaryButtonHeight / 2),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.touch_app_outlined, size: 16, color: theme.accentColor),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              text,
+              style: theme.bodyStyle.copyWith(color: theme.accentColor),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),

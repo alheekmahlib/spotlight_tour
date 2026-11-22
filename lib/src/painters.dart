@@ -10,6 +10,7 @@ class SpotlightPainter extends CustomPainter {
     required this.borderWidth,
     required this.glowSigma,
     required this.scrimOpacity,
+    this.tapThroughTarget = false,
   });
 
   final Color scrimColor;
@@ -24,6 +25,18 @@ class SpotlightPainter extends CustomPainter {
 
   /// 0..1 fade of the whole scrim (tour enter/exit).
   final double scrimOpacity;
+
+  /// When true, gestures landing inside [targetPath] pass through the
+  /// backdrop to the app's widgets below (see [TourStep.interaction]),
+  /// instead of being absorbed by the tour.
+  final bool tapThroughTarget;
+
+  @override
+  bool? hitTest(Offset position) {
+    final t = targetPath;
+    if (tapThroughTarget && t != null && t.contains(position)) return false;
+    return true;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -62,7 +75,8 @@ class SpotlightPainter extends CustomPainter {
       !identical(oldDelegate.targetPath, targetPath) ||
       oldDelegate.borderWidth != borderWidth ||
       oldDelegate.glowSigma != glowSigma ||
-      oldDelegate.scrimOpacity != scrimOpacity;
+      oldDelegate.scrimOpacity != scrimOpacity ||
+      oldDelegate.tapThroughTarget != tapThroughTarget;
 }
 
 /// The white "tap" orb that grows and fades on top of the highlighted target.

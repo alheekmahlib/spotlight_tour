@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:spotlight_tour/spotlight_tour.dart';
 
@@ -23,20 +25,28 @@ class DemoApp extends StatelessWidget {
   }
 }
 
-/// نص الصفحة المتدفق: آيتان متتابعتان في سياق واحد، لعرض إبراز نطاق نصي.
-const String pageText =
-    'وَإِذَا حُيِّيتُم بِتَحِيَّةٍ فَحَيُّوا بِأَحْسَنَ مِنْهَا أَوْ رُدُّوهَا ۗ إِنَّ اللَّهَ كَانَ عَلَىٰ كُلِّ شَيْءٍ حَسِيبًا ﴿٨٦﴾ '
-    'وَاللَّهُ لَا إِلَٰهَ إِلَّا هُوَ ۚ لَيَجْمَعَنَّكُمْ إِلَىٰ يَوْمِ الْقِيَامَةِ لَا رَيْبَ فِيهِ ۗ وَمَنْ أَصْدَقُ مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾';
+/// نص الصفحة الأولى.
+const String pageOneText =
+    'وَإِذَا حُيِّيتُم بِتَحِيَّةٍ فَحَيُّوا بِأَحْسَنَ مِنْهَا أَوْ رُدُّوهَا ۗ '
+    'إِنَّ اللَّهَ كَانَ عَلَىٰ كُلِّ شَيْءٍ حَسِيبًا ﴿٨٦﴾ '
+    'يَا أَيُّهَا الَّذِينَ آمَنُوا لَا تَتَّبِعُوا خُطُوَاتِ الشَّيْطَانِ ۚ '
+    'وَمَن يَتَّبِعْ خُطُوَاتِهِ فَإِنَّهُ يَأْمُرُ بِالْفَحْشَاءِ وَالْمُنكَرِ ﴿٢١﴾';
 
-/// نطاق الآية الثانية داخل النص المتدفق (تبدأ منتصف سطر وتنتهي منتصف سطر).
-TextRange secondVerseRange() {
-  final start = pageText.indexOf('وَاللَّهُ');
-  final marker = '﴿٨٧﴾';
-  final end = pageText.indexOf(marker) + marker.length;
-  return TextRange(start: start, end: end);
+/// نص الصفحة الثانية: آيتان متتابعتان في سياق واحد، لعرض إبراز نطاق نصي.
+const String pageTwoText =
+    'وَاللَّهُ لَا إِلَٰهَ إِلَّا هُوَ ۚ لَيَجْمَعَنَّكُمْ إِلَىٰ يَوْمِ الْقِيَامَةِ لَا رَيْبَ فِيهِ ۗ وَمَنْ أَصْدَقُ مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾ '
+    'فَمَا لَكُمْ فِي الْمُنَافِقِينَ فِئَتَيْنِ وَاللَّهُ أَرْكَسَهُم بِمَا كَسَبُوا ۚ أَتُرِيدُونَ أَن تَهْدُوا مَنْ أَضَلَّ اللَّهُ ﴿٨٨﴾';
+
+/// نطاق الآية الأولى من الصفحة الثانية (تبدأ منتصف سطر وتنتهي منتصف سطر).
+TextRange firstVerseOfPageTwo() {
+  const marker = '﴿٨٧﴾';
+  final end = pageTwoText.indexOf(marker) + marker.length;
+  return TextRange(start: 0, end: end);
 }
 
-/// A small Quran-reader-like screen used to demonstrate the tour.
+/// A small Quran-reader-like screen demonstrating an *interactive* tour:
+/// the tour turns real pages, opens the real verse-options sheet and waits
+/// for real user gestures — not just explanations floating above the screen.
 class MushafDemoScreen extends StatefulWidget {
   const MushafDemoScreen({super.key});
 
@@ -45,56 +55,132 @@ class MushafDemoScreen extends StatefulWidget {
 }
 
 class _MushafDemoScreenState extends State<MushafDemoScreen> {
-  final _pageKey = GlobalKey();
+  final _pageViewKey = GlobalKey();
   final _pageTextKey = GlobalKey();
-  final _verseKey = GlobalKey();
+  final _tafsirKey = GlobalKey();
   final _quickBarKey = GlobalKey();
   final _searchKey = GlobalKey();
-  final _micKey = GlobalKey();
   final _navKey = GlobalKey();
 
+  final _pageController = PageController();
+  bool _verseOptionsOpen = false;
+
   late final SpotlightTourController _tour;
+
+  /// رقم خطوة تعليم السحب داخل قائمة الخطوات.
+  static const _swipeStepIndex = 1;
 
   @override
   void initState() {
     super.initState();
-    _tour = SpotlightTourController(steps: _buildSteps());
+    _tour = SpotlightTourController(steps: _buildSteps())
+      // إن تخطّى المستخدم الجولة أو أنهاها بينما النافذة مفتوحة، أغلقها.
+      ..onSkip = _closeVerseOptions
+      ..onFinish = _closeVerseOptions;
     WidgetsBinding.instance.addPostFrameCallback((_) => _tour.start());
   }
 
   @override
   void dispose() {
+    _pageController.dispose();
     _tour.dispose();
     super.dispose();
   }
 
+  /// نفس الدالة التي يستدعيها الضغط المطوّل الحقيقي على الآية.
+  Future<void> _openVerseOptions() async {
+    if (_verseOptionsOpen) return;
+    _verseOptionsOpen = true;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1815),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              ListTile(
+                key: _tafsirKey,
+                leading: const Icon(Icons.menu_book_outlined,
+                    color: Color(0xFFB08E3F)),
+                title: const Text('التفسير',
+                    style: TextStyle(color: Color(0xFFE8E2D5))),
+                subtitle: const Text('ابن كثير والطبري',
+                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+                onTap: () {},
+              ),
+              const ListTile(
+                leading:
+                    Icon(Icons.share_outlined, color: Color(0x99FFFFFF)),
+                title: Text('المشاركة',
+                    style: TextStyle(color: Color(0xFFE8E2D5))),
+              ),
+              const ListTile(
+                leading: Icon(Icons.headphones_outlined,
+                    color: Color(0x99FFFFFF)),
+                title: Text('استماع',
+                    style: TextStyle(color: Color(0xFFE8E2D5))),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+    _verseOptionsOpen = false;
+  }
+
+  void _closeVerseOptions() {
+    if (!_verseOptionsOpen) return;
+    Navigator.of(context).pop();
+  }
+
   List<TourStep> _buildSteps() => [
         const TourStep(
-          title: 'جولة في التطبيق',
+          title: 'جولة تفاعلية',
           description:
-              'جولة قصيرة نتعرف فيها على أهم أجزاء الشاشة وكيفية استخدامها.',
+              'هذه الجولة لا تشرح فقط، بل تنفّذ معك: ستقلب الصفحة بنفسك، وستفتح الجولة خيارات الآية الحقيقية لتشرحها لك.',
         ),
+        // خطوة تفاعلية: اللمس يمر عبر التعتيم إلى المصحف نفسه، ولا «التالي»
+        // هنا — تتقدم الجولة عندما يسحب المستخدم الصفحة فعلاً.
         TourStep(
-          targetKey: _pageKey,
-          title: 'كبّر الصفحة',
+          targetKey: _pageViewKey,
+          title: 'قلّب الصفحات',
           description:
-              'باعد بين إصبعيك على الصفحة، أو قرّب الإصبعين، لتكبير النص وتصغيره.',
-          icon: Icons.zoom_in,
+              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً. جرّب الآن: اسحب الصفحة لتنتقل الجولة معك.',
+          icon: Icons.swipe_outlined,
+          interaction: TourTargetInteraction.swipe,
+          requireInteraction: true,
+          interactionHint: 'اسحب الصفحة للمتابعة',
         ),
+        // ضغط «التالي» هنا ينفّذ نفس دالة الضغط المطوّل في التطبيق، فتفتح
+        // خيارات الآية الحقيقية، ثم تكمل الجولة الشرح عليها.
         TourStep(
           targetKey: _pageTextKey,
           shape: TourTargetShape.textLines,
-          textRange: secondVerseRange(),
-          title: 'اضغط مطولاً على أي آية',
+          textRange: firstVerseOfPageTwo(),
+          title: 'خيارات الآية',
           description:
-              'يفتح درجاً فيه التفسير والترجمة والاستماع، دون أن تغادر الصفحة.',
+              'الضغط المطوّل على أي آية يفتح خياراتها: التفسير والمشاركة والاستماع. اضغط «التالي» وسنفتحها لك الآن.',
           icon: Icons.touch_app_outlined,
+          // مهم: لا نعيد Future الخاص بالنافذة نفسها (يكتمل عند إغلاقها)، بل
+          // نشغّل الفتح فقط، وتنتظر الجولة ظهور الهدف التالي تلقائياً.
+          onNext: () => unawaited(_openVerseOptions()),
         ),
+        // هدف داخل النافذة المنبثقة: ترتفع الجولة فوقها تلقائياً وتبرز
+        // «التفسير». ضغط «التالي» يغلق النافذة قبل متابعة الجولة.
         TourStep(
-          targetKey: _verseKey,
-          title: 'بطاقة الآية',
-          description: 'هذا إطار عادي حول ويدجت كامل، للمقارنة مع إطار النص.',
-          icon: Icons.crop_free,
+          targetKey: _tafsirKey,
+          title: 'التفسير',
+          description:
+              'من هذه القائمة تفتح التفسير مباشرة. اضغط «التالي» لنغلق القائمة ونكمل الجولة.',
+          icon: Icons.menu_book_outlined,
+          onNext: _closeVerseOptions,
         ),
         TourStep(
           targetKey: _quickBarKey,
@@ -102,20 +188,6 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
           description:
               'شغّل التلاوة من هذه الآية، وشاركها نصاً أو صورة، وانسخها واحفظها.',
           icon: Icons.flash_on_outlined,
-        ),
-        TourStep(
-          targetKey: _searchKey,
-          title: 'ابحث',
-          description: 'اكتب كلمة من الآية، أو اسم السورة، وانتقل إليها بلمسة.',
-          icon: Icons.search,
-        ),
-        TourStep(
-          targetKey: _micKey,
-          title: 'سمّع حفظك',
-          description:
-              'تخفى الآية، فاضغط الميكروفون وابدأ التسميع. يظهر حين تحتاج المراجعة.',
-          icon: Icons.mic_none,
-          shape: TourTargetShape.circle,
         ),
         TourStep(
           targetKey: _navKey,
@@ -128,6 +200,15 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
           description: 'تجد هذه الجولة في الإعدادات متى ما أردت إعادتها.',
         ),
       ];
+
+  /// عندما يقلب المستخدم الصفحة فعلاً أثناء خطوة تعليم السحب، تتقدم الجولة.
+  void _onPageChanged(int page) {
+    if (_tour.status == TourStatus.running &&
+        _tour.index == _swipeStepIndex &&
+        page == 1) {
+      _tour.next();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,44 +229,16 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
         body: Column(
           children: [
             Expanded(
-              key: _pageKey,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: SingleChildScrollView(
-                  physics: const NeverScrollableScrollPhysics(),
-                  child: Text(
-                    pageText,
-                    key: _pageTextKey,
-                    style: const TextStyle(
-                      fontFamily: 'Amiri',
-                      fontSize: 22,
-                      height: 2.1,
-                      color: Color(0xFFE8E2D5),
-                    ),
-                    textAlign: TextAlign.justify,
-                  ),
-                ),
+              key: _pageViewKey,
+              child: PageView(
+                controller: _pageController,
+                onPageChanged: _onPageChanged,
+                children: [
+                  _mushafPage(pageOneText, null),
+                  _mushafPage(pageTwoText, _pageTextKey),
+                ],
               ),
             ),
-            Container(
-              key: _verseKey,
-              margin: const EdgeInsets.symmetric(horizontal: 20),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                border: Border.all(color: const Color(0x33B08E3F)),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text(
-                'فَمَا لَكُمْ فِي الْمُنَافِقِينَ فِئَتَيْنِ وَاللَّهُ أَرْكَسَهُم بِمَا كَسَبُوا ﴿٨٨﴾',
-                style: TextStyle(
-                    fontFamily: 'Amiri',
-                    fontSize: 20,
-                    height: 1.9,
-                    color: Color(0xFFE8E2D5)),
-              ),
-            ),
-            const SizedBox(height: 12),
             Container(
               key: _quickBarKey,
               margin: const EdgeInsets.symmetric(horizontal: 20),
@@ -194,16 +247,14 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
                 color: const Color(0xFF1A1815),
                 borderRadius: BorderRadius.circular(30),
               ),
-              child: Row(
+              child: const Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  Icon(Icons.mic_none,
-                      key: _micKey, color: const Color(0xFFB08E3F)),
-                  const Icon(Icons.bookmark_border, color: Color(0x99FFFFFF)),
-                  const Icon(Icons.copy_outlined, color: Color(0x99FFFFFF)),
-                  const Icon(Icons.share_outlined, color: Color(0x99FFFFFF)),
-                  const Icon(Icons.play_arrow,
-                      color: Color(0xFFB08E3F), size: 30),
+                  Icon(Icons.mic_none, color: Color(0xFFB08E3F)),
+                  Icon(Icons.bookmark_border, color: Color(0x99FFFFFF)),
+                  Icon(Icons.copy_outlined, color: Color(0x99FFFFFF)),
+                  Icon(Icons.share_outlined, color: Color(0x99FFFFFF)),
+                  Icon(Icons.play_arrow, color: Color(0xFFB08E3F), size: 30),
                 ],
               ),
             ),
@@ -226,8 +277,35 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
           ],
         ),
         floatingActionButton: FloatingActionButton.small(
-          onPressed: () => _tour.start(),
+          onPressed: () {
+            _closeVerseOptions();
+            _tour.start();
+          },
           child: const Icon(Icons.replay),
+        ),
+      ),
+    );
+  }
+
+  Widget _mushafPage(String text, GlobalKey? textKey) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      child: SingleChildScrollView(
+        physics: const NeverScrollableScrollPhysics(),
+        child: GestureDetector(
+          // الضغط المطوّل الحقيقي في التطبيق: نفس الدالة التي تستدعيها الجولة.
+          onLongPress: () => unawaited(_openVerseOptions()),
+          child: Text(
+            text,
+            key: textKey,
+            style: const TextStyle(
+              fontFamily: 'Amiri',
+              fontSize: 22,
+              height: 2.1,
+              color: Color(0xFFE8E2D5),
+            ),
+            textAlign: TextAlign.justify,
+          ),
         ),
       ),
     );

@@ -26,6 +26,16 @@ class SpotlightTourController extends ChangeNotifier {
   int _index = 0;
   TourStatus _status = TourStatus.idle;
 
+  /// While true, a step action ([TourStep.onNext]/[TourStep.onEnter]) or the
+  /// step transition animation is still running. [next], [previous] and
+  /// [start] are ignored in this state, so rapid taps and reentrant calls
+  /// from app handlers cannot corrupt the transition; [skip] stays usable.
+  bool _busy = false;
+
+  /// Whether the current [TourStatus.closing] came from the user confirming
+  /// the last step (so its [TourStep.onNext] still runs) rather than a skip.
+  bool _finishedByConfirm = false;
+
   /// Steps of the current (or next) run.
   List<TourStep> get steps => _steps;
 
@@ -34,6 +44,13 @@ class SpotlightTourController extends ChangeNotifier {
 
   /// Whether the tour overlay is on screen.
   TourStatus get status => _status;
+
+  /// Whether a step action or transition is in flight (the card shows the
+  /// primary button disabled with a spinner).
+  bool get isBusy => _busy;
+
+  /// True while closing after the last step's Done button (not a skip).
+  bool get finishedByConfirm => _finishedByConfirm;
 
   /// The active step, or `null` when idle.
   TourStep? get currentStep =>
@@ -62,17 +79,23 @@ class SpotlightTourController extends ChangeNotifier {
 
   /// Starts the tour from the first step. Optionally replaces the steps.
   void start({List<TourStep>? steps, int initialIndex = 0}) {
+    if (_busy) return;
     if (steps != null) _steps = steps;
     if (_steps.isEmpty) return;
     _index = initialIndex.clamp(0, _steps.length - 1);
     _status = TourStatus.running;
+    _finishedByConfirm = false;
     notifyListeners();
     onStepChanged?.call(_index);
   }
 
   /// Advances to the next step, or finishes on the last one.
+  ///
+  /// Also called programmatically by the app's own gesture handlers on
+  /// [TourStep.requireInteraction] steps: when the user really performs the
+  /// gesture, the app's handler calls `next()` and the tour continues.
   void next() {
-    if (_status != TourStatus.running) return;
+    if (_status != TourStatus.running || _busy) return;
     if (isLastStep) {
       finish();
       return;
@@ -84,15 +107,16 @@ class SpotlightTourController extends ChangeNotifier {
 
   /// Goes back one step. Does nothing on the first step.
   void previous() {
-    if (_status != TourStatus.running || _index == 0) return;
+    if (_status != TourStatus.running || _busy || _index == 0) return;
     _index--;
     notifyListeners();
     onStepChanged?.call(_index);
   }
 
-  /// Skips the tour.
+  /// Skips the tour. Always works, even while a step action is running.
   void skip() {
     if (_status != TourStatus.running) return;
+    _finishedByConfirm = false;
     _status = TourStatus.closing;
     notifyListeners();
     onSkip?.call();
@@ -102,6 +126,7 @@ class SpotlightTourController extends ChangeNotifier {
   /// also be called programmatically).
   void finish() {
     if (_status != TourStatus.running) return;
+    _finishedByConfirm = true;
     _status = TourStatus.closing;
     notifyListeners();
     onFinish?.call();
@@ -111,6 +136,15 @@ class SpotlightTourController extends ChangeNotifier {
   void markClosed() {
     if (_status != TourStatus.closing) return;
     _status = TourStatus.idle;
+    _busy = false;
+    notifyListeners();
+  }
+
+  /// Internal: the overlay toggles [isBusy] around step actions and
+  /// transitions. Not part of the public API.
+  void setBusy(bool value) {
+    if (_busy == value) return;
+    _busy = value;
     notifyListeners();
   }
 }

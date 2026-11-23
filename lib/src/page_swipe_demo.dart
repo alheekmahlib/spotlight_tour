@@ -65,9 +65,18 @@ class PageSwipeDemoIndicator {
 ///   },
 ///   ```
 ///
-/// - [cancel] restores the starting offset immediately: wire it to the
-///   step's `onExit` (or the controller's skip/dispose paths) so a skipped
-///   or interrupted tour never leaves the page half-turned.
+/// - Before the page moves at all, [demonstrate] waits [settleDuration]
+///   with the page still and the indicator parked at the starting edge,
+///   so the user first sees the step itself (its card and spotlight) and
+///   only then watches the page turn. Set it to [Duration.zero] for the
+///   old immediate behaviour.
+/// - [cancel] restores the starting offset immediately. You do not need to
+///   wire this yourself: when the step sets `TourStep.swipeDemo`, the tour
+///   runs [demonstrate] automatically once the step has appeared (in the
+///   direction of the step's `TourIndicator`), and cancels it whenever the
+///   step is left — Next, Previous, skip or finish. Manual wiring through
+///   `onEnter`/`onExit` keeps working: [demonstrate] is a no-op while a
+///   run is in flight and [cancel] is safe to call when idle.
 /// - At the scroll edge where the demonstrated direction has no full page
 ///   of room (e.g. demonstrating a left-to-right swipe while on the last
 ///   page of an RTL reader), [demonstrate] is a safe no-op: it never shows
@@ -88,20 +97,21 @@ class PageSwipeDemoIndicator {
 /// TourStep(
 ///   targetKey: _pageViewKey,
 ///   indicator: TourIndicator.swipeLeftToRight,
-///   swipeDemo: _swipeDemo,
-///   onEnter: () => unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight)),
-///   onExit: _swipeDemo.cancel,
+///   swipeDemo: _swipeDemo, // the tour runs and cancels the demo itself
 ///   // ...
 /// );
 /// ```
 ///
-/// Honours the system's reduced-motion setting by *not being run*: check
-/// `MediaQuery.of(context).disableAnimations` in `onEnter` and skip
-/// [demonstrate], the same rule the tour applies to its own indicator.
+/// Honours the system's reduced-motion setting by *not being run*: the
+/// tour's automatic run skips it under `MediaQuery.disableAnimations`, the
+/// same rule the tour applies to its own indicator. If you call
+/// [demonstrate] yourself instead (see `TourStep.autoRunSwipeDemo`), make
+/// the same check first.
 class PageSwipeDemo {
   PageSwipeDemo({
     required this.pageController,
     required TickerProvider vsync,
+    this.settleDuration = const Duration(milliseconds: 1000),
     this.turnDuration = const Duration(milliseconds: 850),
     this.holdDuration = const Duration(milliseconds: 450),
     this.curve = Curves.easeInOutCubic,
@@ -109,6 +119,14 @@ class PageSwipeDemo {
 
   /// The controller of the `PageView` to demonstrate on.
   final PageController pageController;
+
+  /// Pause with the page still before the turn starts. The step that
+  /// triggered the demonstration has just appeared — its card is sliding
+  /// in and its spotlight gliding over — so the turn waits for the user to
+  /// actually see it instead of firing the instant the step arrives.
+  /// During the wait the indicator is parked at the starting edge, fading
+  /// in. Default 1000 ms; [Duration.zero] restores the immediate start.
+  final Duration settleDuration;
 
   /// Duration of each full-page turn, out and back. Default 850 ms — slow
   /// enough that the flip reads as a real page turn, not a flicker.
@@ -156,10 +174,11 @@ class PageSwipeDemo {
     }
   }
 
-  /// Turns the page fully toward [direction], holds, and turns back to the
-  /// exact offset the demonstration started from. No-op while another
-  /// demonstration is running, when the `PageView` is not attached, or when
-  /// the scroll edge leaves no full page of room in [direction].
+  /// Waits [settleDuration] with the page still, then turns the page fully
+  /// toward [direction], holds, and turns back to the exact offset the
+  /// demonstration started from. No-op while another demonstration is
+  /// running, when the `PageView` is not attached, or when the scroll edge
+  /// leaves no full page of room in [direction].
   ///
   /// Completes when the page is back at its starting offset; a [cancel]
   /// mid-flight completes it early, after restoring the offset.
@@ -182,17 +201,18 @@ class PageSwipeDemo {
 
     _startPixels = start;
     _delta = delta;
+    final settle = settleDuration.inMicroseconds;
     final turn = turnDuration.inMicroseconds;
     final hold = holdDuration.inMicroseconds;
-    final total = 2 * turn + hold;
+    final total = settle + 2 * turn + hold;
     _ctrl.duration = Duration(microseconds: total);
     final requestedLtr = direction == TourSwipeDirection.leftToRight;
 
     double factorAt(int us) {
-      if (us <= 0) return 0;
-      if (us < turn) return curve.transform(us / turn);
-      if (us < turn + hold) return 1.0;
-      final back = ((us - turn - hold) / turn).clamp(0.0, 1.0);
+      if (us <= settle) return 0;
+      if (us < settle + turn) return curve.transform((us - settle) / turn);
+      if (us < settle + turn + hold) return 1.0;
+      final back = ((us - settle - turn - hold) / turn).clamp(0.0, 1.0);
       return 1.0 - curve.transform(back);
     }
 
@@ -211,14 +231,16 @@ class PageSwipeDemo {
           pageController.jumpTo(px);
         }
       }
-      // The indicator follows the page itself: same eased fraction, and the
-      // travel direction flips on the return leg.
-      final onReturnLeg = us >= turn + hold;
+      // The indicator follows the page itself: parked at the starting
+      // edge while the settle elapses (fading in), then the same eased
+      // fraction as the page, with the travel direction flipping on the
+      // return leg.
+      final onReturnLeg = us >= settle + turn + hold;
       _indicator.value = PageSwipeDemoIndicator(
         fraction: requestedLtr ? f : 1.0 - f,
         leftToRight: onReturnLeg ? !requestedLtr : requestedLtr,
-        opacity: us < turn
-            ? (us / (turn * 0.18)).clamp(0.0, 1.0)
+        opacity: us < settle && settle > 0
+            ? (us / (settle * 0.6)).clamp(0.0, 1.0)
             : ((total - us) / (turn * 0.18)).clamp(0.0, 1.0),
       );
     }

@@ -1134,7 +1134,7 @@ void main() {
         );
 
     Future<void> runToEnd(WidgetTester tester, Future<void> done) async {
-      // The full demo (850 + 450 + 850 ms) plus slack.
+      // The full demo (1000 settle + 850 + 450 + 850 ms) plus slack.
       for (var i = 0; i < 70; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
@@ -1266,8 +1266,9 @@ void main() {
       final viewport = pc.position.viewportDimension;
       final done = demo.demonstrate(TourSwipeDirection.leftToRight);
       await tester.pump();
-      // Outbound: 850 ms turn + 450 ms hold. Land mid-return.
-      for (var i = 0; i < 31; i++) {
+      // Settle: 1000 ms. Outbound: 850 ms turn + 450 ms hold. Land
+      // mid-return.
+      for (var i = 0; i < 52; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
       final mid = pc.position.pixels - start;
@@ -1354,5 +1355,354 @@ void main() {
       expect(pc.position.pixels, moreOrLessEquals(0, epsilon: 0.001));
       expect(demo.isRunning, isFalse);
     });
+
+    testWidgets(
+        'settle: the page stays put and the indicator parks at the start edge first',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+
+      // During the settle (default 1000 ms) the page must not move at all,
+      // while the parked indicator fades in at the starting edge (left for
+      // a left-to-right demonstration) showing the requested direction.
+      var maxOpacity = 0.0;
+      for (var i = 0; i < 18; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001),
+            reason: 'no page movement during the settle pause');
+        final sync = demo.indicator.value;
+        expect(sync, isNotNull,
+            reason: 'the orb is parked while the user sees the step');
+        expect(sync!.leftToRight, isTrue);
+        expect(sync.fraction, moreOrLessEquals(0.0, epsilon: 0.001));
+        if (sync.opacity > maxOpacity) maxOpacity = sync.opacity;
+      }
+      expect(maxOpacity, greaterThan(0.9),
+          reason: 'the parked orb fades in during the pause');
+
+      // Only after the settle does the page actually turn.
+      await runToEnd(tester, done);
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(demo.isRunning, isFalse);
+      expect(demo.indicator.value, isNull);
+    });
+
+    testWidgets('cancel during the settle: nothing to restore, indicator clears',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400)); // mid-settle
+      expect(demo.isRunning, isTrue);
+      expect(demo.indicator.value, isNotNull);
+
+      demo.cancel();
+      expect(demo.isRunning, isFalse);
+      expect(demo.indicator.value, isNull);
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      await done;
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+    });
+
+    testWidgets('a zero settleDuration starts the turn immediately',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(
+          pageController: pc,
+          vsync: const TestVSync(),
+          settleDuration: Duration.zero);
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect((pc.position.pixels - start).abs(), greaterThan(0),
+          reason: 'no settle configured: the page moves right away');
+      await runToEnd(tester, done);
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+    });
   });
+
+  group('swipe demo auto-run', () {
+    /// Screen with a real PageView and a tour whose swipe step declares
+    /// `swipeDemo` and NOTHING else: no onEnter/onExit wiring. The tour
+    /// must run and cancel the demonstration by itself.
+    Future<({PageController pc, PageSwipeDemo demo, SpotlightTourController tour})>
+        pumpAutoRunApp(
+      WidgetTester tester, {
+      bool secondStep = false,
+      bool autoRun = true,
+    }) async {
+      final pc = PageController(initialPage: 1);
+      final tour = SpotlightTourController();
+      final pageKey = GlobalKey();
+      addTearDown(pc.dispose);
+      final hostKey = GlobalKey<_SwipeHostState>();
+      await tester.pumpWidget(MaterialApp(
+        home: _SwipeHost(
+            key: hostKey,
+            tour: tour,
+            pageController: pc,
+            pageKey: pageKey,
+            autoRun: autoRun,
+            secondStep: secondStep),
+      ));
+      await tester.pump();
+      return (pc: pc, demo: hostKey.currentState!.demo, tour: tour);
+    }
+
+    testWidgets(
+        'no hooks wired: the tour runs the demo itself, after the settle pause',
+        (tester) async {
+      final app = await pumpAutoRunApp(tester);
+      final start = app.pc.position.pixels;
+
+      app.tour.start();
+      await tester.pump();
+      // The demo is auto-started on step entry, but the settle keeps the
+      // page still while the step's card and spotlight appear.
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(app.demo.isRunning, isTrue,
+          reason: 'auto-started without any onEnter wiring');
+      expect(app.pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001),
+          reason: 'the page waits for the settle pause');
+      expect(app.demo.indicator.value, isNotNull,
+          reason: 'the orb is parked at the starting edge during the pause');
+
+      // After the pause the page really turns, out and back to the exact
+      // offset, still with zero app wiring.
+      var moved = 0.0;
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        moved = (app.pc.position.pixels - start).abs();
+        if (moved > 40) break;
+      }
+      expect(moved, greaterThan(40));
+      for (var i = 0; i < 90 && app.demo.isRunning; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(app.pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      app.tour.skip();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('advancing mid-demo cancels it and restores the page',
+        (tester) async {
+      final app = await pumpAutoRunApp(tester, secondStep: true);
+      final start = app.pc.position.pixels;
+
+      app.tour.start();
+      await tester.pump();
+      var moved = 0.0;
+      for (var i = 0; i < 80; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        moved = (app.pc.position.pixels - start).abs();
+        if (moved > 40) break;
+      }
+      expect(moved, greaterThan(40), reason: 'mid-demonstration');
+
+      app.tour.next();
+      await tester.pump();
+      expect(app.demo.isRunning, isFalse);
+      expect(app.pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001),
+          reason: 'leaving the step restores the user\'s page');
+      await tester.pump(const Duration(milliseconds: 1200));
+      expect(app.pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001),
+          reason: 'the cancelled run must not reappear mid-transition');
+      app.tour.skip();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('skip mid-demo cancels it and restores the page',
+        (tester) async {
+      final app = await pumpAutoRunApp(tester);
+      final start = app.pc.position.pixels;
+
+      app.tour.start();
+      await tester.pump();
+      var moved = 0.0;
+      for (var i = 0; i < 80; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        moved = (app.pc.position.pixels - start).abs();
+        if (moved > 40) break;
+      }
+      expect(moved, greaterThan(40), reason: 'mid-demonstration');
+
+      app.tour.skip();
+      await tester.pump();
+      expect(app.demo.isRunning, isFalse);
+      expect(app.pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      await tester.pumpAndSettle();
+      expect(app.pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+    });
+
+    testWidgets('reduced motion: the demo is never auto-run', (tester) async {
+      final pc = PageController(initialPage: 1);
+      final tour = SpotlightTourController();
+      final pageKey = GlobalKey();
+      addTearDown(pc.dispose);
+      final hostKey = GlobalKey<_SwipeHostState>();
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (context) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(disableAnimations: true),
+            child: _SwipeHost(
+                key: hostKey,
+                tour: tour,
+                pageController: pc,
+                pageKey: pageKey,
+                autoRun: true,
+                secondStep: false),
+          ),
+        ),
+      ));
+      await tester.pump();
+      final demo = hostKey.currentState!.demo;
+      final start = pc.position.pixels;
+
+      tour.start();
+      await tester.pump();
+      for (var i = 0; i < 60; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(demo.isRunning, isFalse);
+      expect(demo.indicator.value, isNull);
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      tour.skip();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets(
+        'autoRunSwipeDemo: false leaves the driving to the app (onEnter wiring)',
+        (tester) async {
+      final pc = PageController(initialPage: 1);
+      final tour = SpotlightTourController();
+      final pageKey = GlobalKey();
+      addTearDown(pc.dispose);
+      final hostKey = GlobalKey<_SwipeHostState>();
+      await tester.pumpWidget(MaterialApp(
+        home: _SwipeHost(
+            key: hostKey,
+            tour: tour,
+            pageController: pc,
+            pageKey: pageKey,
+            autoRun: false,
+            wireHooks: true,
+            secondStep: false),
+      ));
+      await tester.pump();
+      final demo = hostKey.currentState!.demo;
+      final start = pc.position.pixels;
+
+      tour.start();
+      await tester.pump();
+      await tester.pump();
+      expect(demo.isRunning, isTrue,
+          reason: 'the app\'s own onEnter call still drives the demo');
+      for (var i = 0; i < 90 && demo.isRunning; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      tour.skip();
+      await tester.pumpAndSettle();
+    });
+  });
+}
+
+/// Host for the auto-run group: a plain LTR PageView (page 1 of 3, so both
+/// directions have room) wrapped in a SpotlightTour. The swipe step only
+/// declares `indicator` + `swipeDemo` — no hooks unless [wireHooks] asks
+/// for the old manual style.
+class _SwipeHost extends StatefulWidget {
+  const _SwipeHost({
+    super.key,
+    required this.tour,
+    required this.pageController,
+    required this.pageKey,
+    required this.autoRun,
+    this.wireHooks = false,
+    this.secondStep = false,
+  });
+
+  final SpotlightTourController tour;
+  final PageController pageController;
+  final GlobalKey pageKey;
+  final bool autoRun;
+  final bool wireHooks;
+  final bool secondStep;
+
+  @override
+  State<_SwipeHost> createState() => _SwipeHostState();
+}
+
+class _SwipeHostState extends State<_SwipeHost>
+    with TickerProviderStateMixin {
+  late final PageSwipeDemo demo = PageSwipeDemo(
+      pageController: widget.pageController, vsync: this);
+
+  @override
+  void initState() {
+    super.initState();
+    widget.tour.steps = [
+      TourStep(
+        targetKey: widget.pageKey,
+        title: 'قلّب',
+        description: 'وصف',
+        indicator: TourIndicator.swipeLeftToRight,
+        swipeDemo: demo,
+        autoRunSwipeDemo: widget.autoRun,
+        onEnter: widget.wireHooks
+            ? () => unawaited(demo.demonstrate(TourSwipeDirection.leftToRight))
+            : null,
+      ),
+      if (widget.secondStep) const TourStep(title: 'نهاية', description: 'وصف'),
+    ];
+  }
+
+  @override
+  void dispose() {
+    demo.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: SpotlightTour(
+        controller: widget.tour,
+        child: Scaffold(
+          body: PageView(
+            key: widget.pageKey,
+            controller: widget.pageController,
+            children: const [
+              Center(child: Text('page 0')),
+              Center(child: Text('page 1')),
+              Center(child: Text('page 2')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -78,6 +78,7 @@ class TourStep {
     this.showPulse = true,
     this.indicator = TourIndicator.pulse,
     this.swipeDemo,
+    this.autoRunSwipeDemo = true,
     this.onEnter,
     this.onNext,
     this.onExit,
@@ -136,14 +137,30 @@ class TourStep {
   final TourIndicator indicator;
 
   /// The [PageSwipeDemo] performing this step's page turn. When set (and
-  /// [indicator] is a swipe direction), the indicator stops looping on its
-  /// own while the demo runs and mirrors the real page instead: the orb
-  /// glides with the turn in the demonstrated direction, then back with
-  /// the return turn — its direction always matches the page's motion.
-  /// While the demo is idle (before it starts, under reduced motion, or at
-  /// a scroll edge with no room) the indicator falls back to the looping
-  /// [indicator] animation.
+  /// [indicator] is a swipe direction), the tour runs the demonstration
+  /// itself shortly after the step appears: the demo waits
+  /// `PageSwipeDemo.settleDuration` with the page still — so the user first
+  /// sees the step's card and spotlight — then turns the page in the
+  /// direction of [indicator], and the indicator mirrors the real page:
+  /// parked at the starting edge during the pause, gliding with the turn,
+  /// then back with the return leg. The tour cancels a still-running
+  /// demonstration whenever the step is left (Next, Previous, skip or
+  /// finish), so the page is never left half-turned. No `onEnter`/`onExit`
+  /// wiring is needed; see [autoRunSwipeDemo] to drive it manually.
+  ///
+  /// If the demo cannot run (reduced motion, or a scroll edge with no full
+  /// page of room in the demonstrated direction) the indicator falls back
+  /// to the looping [indicator] animation.
   final PageSwipeDemo? swipeDemo;
+
+  /// Whether the tour itself runs [swipeDemo] when this step becomes
+  /// active (default) and cancels it when the step is left. The direction
+  /// comes from [indicator]; with [TourIndicator.pulse] no direction is
+  /// known and nothing is auto-run. Set to false to call
+  /// `PageSwipeDemo.demonstrate` yourself at a custom moment — the tour
+  /// still cancels a running demonstration when the step is left, exactly
+  /// like the documented `onExit: demo.cancel` wiring did.
+  final bool autoRunSwipeDemo;
 
   /// Runs when this step becomes active, *before* its target is resolved.
   ///

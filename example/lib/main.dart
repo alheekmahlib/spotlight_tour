@@ -85,8 +85,10 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
 
   final _pageController = PageController();
 
-  /// عرض قلب الصفحة التلقائي: يقلب الصفحة كاملة يميناً بسرعة واضحة، يتوقف
-  /// لحظة، ثم يعيدها إلى موضع المستخدم بالضبط.
+  /// عرض قلب الصفحة التلقائي: بعد ظهور الخطوة يهدأ لحظة، ثم يقلب الصفحة
+  /// كاملة يميناً بسرعة واضحة، يتوقف عليها، ثم يعيدها إلى موضع المستخدم
+  /// بالضبط. الجولة تشغّله وتلغيه بنفسها ما دام مربوطاً بالخطوة
+  /// (`swipeDemo`) — لا حاجة لأي ربط في onEnter/onExit.
   ///
   /// ملاحظة: القلب الكامل يعبر حدود الصفحة، فيطلق PageView ردّ onPageChanged
   /// مرتين (ذهاباً وعودة). إن كان تطبيقك يحدّث حالته من onPageChanged فتجاهل
@@ -178,15 +180,6 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
     Navigator.of(context).pop();
   }
 
-  /// يحرّك الصفحة يميناً ثم يعيدها تلقائياً، دون أن يتغير موضع المستخدم.
-  ///
-  /// بنفس قاعدة النبضة: لا حركة تلقائية إطلاقاً مع «تقليل الحركة»، ويكفي
-  /// حينها وصف الخطوة نفسه.
-  void _demonstrateSwipe() {
-    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return;
-    unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight));
-  }
-
   void _openSettings() {
     unawaited(Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => const Directionality(
@@ -213,14 +206,14 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
           description:
               'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تقلب الصفحة نفسها الآن أمامك ثم تعود إلى مكانها.',
           icon: Icons.swipe_outlined,
-          // المؤشّر يتبع حركة الصفحة نفسها: يميناً مع القلبة ويساراً مع
-          // العودة، بدل أن يدور في اتجاه واحد باستمرار.
+          // كل التشغيل تلقائي: الجولة تنتظر مهلة قصيرة بعد ظهور الخطوة
+          // (PageSwipeDemo.settleDuration) ثم تقلب الصفحة، والمؤشّر يتبع
+          // حركتها نفسها — يميناً مع القلبة ويساراً مع العودة. وإن غادر
+          // المستخدم الخطوة أو تخطّى الجولة أثناء العرض أُلغي تلقائياً
+          // وعادت الصفحة إلى موضعها. ومع «تقليل الحركة» لا يعمل العرض
+          // أصلاً، كبقية حركات الجولة.
           indicator: TourIndicator.swipeLeftToRight,
           swipeDemo: _swipeDemo,
-          onEnter: _demonstrateSwipe,
-          // إن غادر المستخدم الخطوة (أو تخطّى الجولة) أثناء العرض، تُلغى
-          // الحركة فوراً وتعود الصفحة إلى موضعها.
-          onExit: _swipeDemo.cancel,
         ),
         // ضغط «التالي» هنا ينفّذ نفس دالة الضغط المطوّل في التطبيق، فتفتح
         // خيارات الآية الحقيقية، ثم تكمل الجولة الشرح عليها.

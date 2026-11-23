@@ -91,10 +91,11 @@ void main() {
     tour.start();
     await pumpFor(const Duration(milliseconds: 1300)); // intro card
 
-    // The swipe-teaching step: the package turns the real page fully
-    // rightward and turns it back to the user's exact spot.
+    // The swipe-teaching step: after a short settle pause (the user first
+    // sees the step), the package turns the real page fully rightward and
+    // turns it back to the user's exact spot.
     await tester.tap(find.text('ابدأ الجولة'));
-    await pumpFor(const Duration(milliseconds: 3300));
+    await pumpFor(const Duration(milliseconds: 4400));
 
     // Verse contour on the current page.
     await tester.tap(find.text('التالي'));

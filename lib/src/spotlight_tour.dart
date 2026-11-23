@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
 
 import 'painters.dart';
+import 'page_swipe_demo.dart';
 import 'tooltip_card.dart';
 import 'tour_controller.dart';
 import 'tour_labels.dart';
@@ -131,6 +132,10 @@ class _SpotlightTourState extends State<SpotlightTour>
   DateTime? _settleDeadline;
   int _settleGeneration = 0;
 
+  /// The demo whose [PageSwipeDemo.indicator] this state currently listens
+  /// to (see [_watchSwipeDemo]).
+  PageSwipeDemo? _demoListened;
+
   /// Measured card size, used to place the card without overflowing.
   Size _cardSize = const Size(320, 220);
   final GlobalKey _cardKey = GlobalKey();
@@ -167,6 +172,7 @@ class _SpotlightTourState extends State<SpotlightTour>
 
   @override
   void dispose() {
+    _demoListened?.indicator.removeListener(_onDemoIndicator);
     widget.controller.removeListener(_onController);
     _entry?.remove();
     _scrimCtrl.dispose();
@@ -234,6 +240,49 @@ class _SpotlightTourState extends State<SpotlightTour>
   Duration get _morphDuration =>
       _reduceMotion ? Duration.zero : _theme.spotlightMorphDuration;
 
+  /// Listens to the step's [PageSwipeDemo] while the step is active: when
+  /// a synced demonstration ends, the looping indicator must NOT resume —
+  /// the orb would teleport from the page's final position back into a
+  /// loop cycle. The orb rests for the rest of the step instead. When the
+  /// demo never ran (scroll edge, reduced motion) it publishes nothing and
+  /// the loop keeps playing as the documented fallback.
+  void _watchSwipeDemo(TourStep step) {
+    final demo = step.swipeDemo;
+    if (identical(demo, _demoListened)) return;
+    _demoListened?.indicator.removeListener(_onDemoIndicator);
+    _demoListened = demo;
+    demo?.indicator.addListener(_onDemoIndicator);
+  }
+
+  void _onDemoIndicator() {
+    final demo = _demoListened;
+    if (demo == null) return;
+    if (demo.indicator.value == null && !demo.isRunning && !_pulsesDone) {
+      _pulsesDone = true;
+      _pulseCtrl.stop();
+      _entry?.markNeedsBuild();
+    }
+  }
+
+  /// Runs the step's [PageSwipeDemo] when the step declares one (see
+  /// [TourStep.autoRunSwipeDemo]): the tour owns the demonstration's
+  /// timing, so the page starts turning only after the step's card and
+  /// spotlight have appeared (the demo itself additionally waits
+  /// [PageSwipeDemo.settleDuration] before the page moves). A step that
+  /// still wires `onEnter` to [PageSwipeDemo.demonstrate] is unaffected:
+  /// the demo is already running and this call is a no-op.
+  void _autoRunSwipeDemo(TourStep step) {
+    final demo = step.swipeDemo;
+    if (demo == null || !step.autoRunSwipeDemo || _reduceMotion) return;
+    final direction = switch (step.indicator) {
+      TourIndicator.swipeLeftToRight => TourSwipeDirection.leftToRight,
+      TourIndicator.swipeRightToLeft => TourSwipeDirection.rightToLeft,
+      TourIndicator.pulse => null,
+    };
+    if (direction == null || demo.isRunning) return;
+    unawaited(demo.demonstrate(direction));
+  }
+
   /// (Re)starts the pulse for a step that just became active.
   ///
   /// The pulse is bounded by [SpotlightTourTheme.pulseRepeatCount]: after
@@ -275,6 +324,10 @@ class _SpotlightTourState extends State<SpotlightTour>
     final c = widget.controller;
     if (_displayedIndex < c.steps.length) {
       final step = c.steps[_displayedIndex];
+      // A page-turn demonstration still running on the closing step is
+      // cancelled first, so the page is back where the user left it before
+      // any teardown measures or moves it.
+      step.swipeDemo?.cancel();
       if (c.finishedByConfirm) {
         try {
           await step.onNext?.call();
@@ -367,7 +420,9 @@ class _SpotlightTourState extends State<SpotlightTour>
         }
         // The leaving step's teardown runs in BOTH directions (and on a
         // restart): a step must let go of its own UI before the next one
-        // prepares its own.
+        // prepares its own. A page-turn demonstration is cancelled first,
+        // restoring the page before the app's own teardown runs.
+        leaving.swipeDemo?.cancel();
         try {
           await leaving.onExit?.call();
         } catch (_) {
@@ -395,6 +450,13 @@ class _SpotlightTourState extends State<SpotlightTour>
       }
       if (aborted()) return;
       _raiseEntry();
+
+      // The step's page-turn demonstration starts here — after the step's
+      // own entrance began, never before — and is cancelled when the step
+      // is left. The demo's settle delay keeps the page still until the
+      // card and spotlight are on screen.
+      _autoRunSwipeDemo(toStep);
+      _watchSwipeDemo(toStep);
 
       final toTarget = await _resolveTargetWithWait(toStep);
       if (aborted()) return;

@@ -150,11 +150,6 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen>
     Navigator.of(context).pop();
   }
 
-  void _demonstrateSwipe() {
-    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return;
-    unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight));
-  }
-
   List<TourStep> _steps() => [
         const TourStep(
           title: 'جولة تفاعلية',
@@ -167,10 +162,11 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen>
           description:
               'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تتحرك الصفحة الآن أمامك ثم تعود إلى مكانها.',
           icon: Icons.swipe_outlined,
+          // التشغيل تلقائي كلياً: الجولة تشغّل العرض بعد مهلة قصيرة من
+          // ظهور الخطوة (settleDuration) وتلغيه عند مغادرتها، والمؤشّر
+          // يتبع حركة الصفحة نفسها ذهاباً وعودة.
           indicator: TourIndicator.swipeLeftToRight,
           swipeDemo: _swipeDemo,
-          onEnter: _demonstrateSwipe,
-          onExit: _swipeDemo.cancel,
         ),
         TourStep(
           targetKey: k.pageText,

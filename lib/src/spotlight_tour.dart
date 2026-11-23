@@ -109,6 +109,12 @@ class _SpotlightTourState extends State<SpotlightTour>
   /// True once the exit animation has started (skip/finish).
   bool _closing = false;
 
+  /// The run generation this state is showing (see
+  /// [SpotlightTourController.runGeneration]). A start() while the tour is
+  /// visible bumps the generation without changing the index, which is how
+  /// a restart from anywhere replaces the running tour cleanly.
+  int _shownGeneration = 0;
+
   /// Current animated spotlight bounds (null = no cutout on this step).
   _SpotTarget? _target;
   RRect? _morphFrom;
@@ -144,6 +150,19 @@ class _SpotlightTourState extends State<SpotlightTour>
     _pulseCtrl = AnimationController(vsync: this);
     _pulseCtrl.addStatusListener(_onPulseStatus);
     widget.controller.addListener(_onController);
+    // The controller may already be running: a central host is mounted once
+    // for the app's lifetime, and a service can start a tour before the
+    // first frame (or while the host was temporarily unmounted). Pick the
+    // tour up as soon as we have a frame.
+    if (widget.controller.status == TourStatus.running) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted &&
+            _entry == null &&
+            widget.controller.status == TourStatus.running) {
+          _show();
+        }
+      });
+    }
   }
 
   @override
@@ -163,6 +182,11 @@ class _SpotlightTourState extends State<SpotlightTour>
       case TourStatus.running:
         if (_entry == null) {
           _show();
+        } else if (c.runGeneration != _shownGeneration && !_transitioning) {
+          // start() was called again while a tour was visible: replace it
+          // with the new run. Like a backward move, the leaving step's
+          // onNext action does NOT run, but its onExit teardown does.
+          unawaited(_goToStep(c.index, forward: false));
         } else if (c.index != _displayedIndex && !_transitioning) {
           // Backward moves (and restarts from a higher index) must not run
           // the leaving step's onNext action.
@@ -180,6 +204,7 @@ class _SpotlightTourState extends State<SpotlightTour>
     _textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
     _reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _displayedIndex = widget.controller.index;
+    _shownGeneration = widget.controller.runGeneration;
     _cardSizeDirty = true;
     _entry = OverlayEntry(builder: _buildOverlay);
     Overlay.of(context).insert(_entry!);
@@ -312,12 +337,19 @@ class _SpotlightTourState extends State<SpotlightTour>
     final c = widget.controller;
     if (_transitioning) return;
     _transitioning = true;
+    _shownGeneration = c.runGeneration;
     c.setBusy(true);
     // Read before any await: the setting can change between frames, and the
     // context is unsafe to use across the async gaps below.
     _reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     try {
-      final fromTarget = _resolveTarget(c.steps[_displayedIndex]);
+      // On a restart (start() while running) the controller's step list is
+      // already the NEW tour's; the step actually on screen is the captured
+      // replaced one. It is the one whose target and teardown belong to
+      // this transition.
+      final leaving = c.replacedStepForRestart ?? c.steps[_displayedIndex];
+      c.clearReplacedStep();
+      final fromTarget = _resolveTarget(leaving);
 
       bool aborted() =>
           !mounted ||
@@ -327,17 +359,17 @@ class _SpotlightTourState extends State<SpotlightTour>
       if (!initial) {
         if (forward) {
           try {
-            await c.steps[_displayedIndex].onNext?.call();
+            await leaving.onNext?.call();
           } catch (_) {
             // A failing action must not wedge the tour: continue without it.
           }
           if (aborted()) return;
         }
-        // The leaving step's teardown runs in BOTH directions: returning to
-        // a step must restore exactly the UI that step needs, which only
-        // works if the step being left lets go of its own first.
+        // The leaving step's teardown runs in BOTH directions (and on a
+        // restart): a step must let go of its own UI before the next one
+        // prepares its own.
         try {
-          await c.steps[_displayedIndex].onExit?.call();
+          await leaving.onExit?.call();
         } catch (_) {
           // Same policy as onNext above.
         }
@@ -759,22 +791,47 @@ class _SpotlightTourState extends State<SpotlightTour>
                   // this small layer repaints, not the full-screen scrim.
                   // Always IgnorePointer: the real gesture passes through
                   // to the app on interactive steps.
-                  if (rect != null && !_pulsesDone)
+                  if (rect != null && (!_pulsesDone || step.swipeDemo != null))
                     Builder(builder: (context) {
                       final side = (rect.outerRect.shortestSide * 0.9)
                           .clamp(36.0, 110.0);
                       final center = _pulseCenter(rect, step.pulseAlignment);
                       final swipe = step.indicator != TourIndicator.pulse;
-                      return Positioned(
-                        left: swipe
-                            ? rect.outerRect.left
-                            : center.dx - side / 2,
-                        top: center.dy - side / 2,
-                        width: swipe ? rect.outerRect.width : side,
-                        height: side,
-                        child: IgnorePointer(
-                          child: RepaintBoundary(
-                            child: AnimatedBuilder(
+                      final demo = step.swipeDemo;
+                      // While a PageSwipeDemo wired to this step runs, the
+                      // orb mirrors the real page: it glides with the turn
+                      // and its direction flips with the return leg. Idle
+                      // demo (or none): the usual looping indicator.
+                      final Widget orb = swipe && demo != null
+                          ? AnimatedBuilder(
+                              animation: demo.indicator,
+                              builder: (context, _) {
+                                final sync = demo.indicator.value;
+                                if (sync != null) {
+                                  return CustomPaint(
+                                    painter: SwipePainter.synced(
+                                      fraction: sync.fraction,
+                                      leftToRight: sync.leftToRight,
+                                      opacity: sync.opacity,
+                                    ),
+                                  );
+                                }
+                                if (_pulsesDone) {
+                                  return const SizedBox.shrink();
+                                }
+                                return AnimatedBuilder(
+                                  animation: _pulseCtrl,
+                                  builder: (context, _) => CustomPaint(
+                                    painter: SwipePainter(
+                                      progress: _pulseCtrl.value,
+                                      leftToRight: step.indicator ==
+                                          TourIndicator.swipeLeftToRight,
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : AnimatedBuilder(
                               animation: _pulseCtrl,
                               builder: (context, _) => CustomPaint(
                                 painter: swipe
@@ -786,7 +843,17 @@ class _SpotlightTourState extends State<SpotlightTour>
                                     : PulsePainter(
                                         progress: _pulseCtrl.value),
                               ),
-                            ),
+                            );
+                      return Positioned(
+                        left: swipe
+                            ? rect.outerRect.left
+                            : center.dx - side / 2,
+                        top: center.dy - side / 2,
+                        width: swipe ? rect.outerRect.width : side,
+                        height: side,
+                        child: IgnorePointer(
+                          child: RepaintBoundary(
+                            child: orb,
                           ),
                         ),
                       );

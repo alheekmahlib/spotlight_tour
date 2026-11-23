@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 /// Direction of the swipe a [PageSwipeDemo] demonstrates.
@@ -13,27 +14,70 @@ enum TourSwipeDirection {
   rightToLeft,
 }
 
-/// Demonstrates a page swipe on a [PageController] *without committing a
-/// page change*: the page slides partway in the demonstrated direction,
-/// pauses, then returns to the exact offset it started from.
+/// Where the step's swipe indicator should be while a [PageSwipeDemo] runs.
+///
+/// The tour overlay reads one of these per animation tick (see
+/// [PageSwipeDemo.indicator]) and paints the gliding orb to match the real
+/// page: same eased position, same direction — which flips between the
+/// outward turn and the return.
+class PageSwipeDemoIndicator {
+  const PageSwipeDemoIndicator({
+    required this.fraction,
+    required this.leftToRight,
+    required this.opacity,
+  });
+
+  /// Horizontal position of the orb's head as a 0..1 fraction of the
+  /// target's width (0 = left edge, 1 = right edge), mirroring how far the
+  /// page itself has slid.
+  final double fraction;
+
+  /// Travel direction of the CURRENT leg: the requested direction on the
+  /// outward turn, the opposite on the return.
+  final bool leftToRight;
+
+  /// 0..1 fade of the orb: fades in at the start of the turn and out at the
+  /// end of the return.
+  final double opacity;
+}
+
+/// Demonstrates a page swipe on a [PageController] by actually turning the
+/// page — one full page in the demonstrated direction, a short hold, then a
+/// full turn back to the exact offset the user was reading.
 ///
 /// This is the automatic alternative to a "try it yourself" swipe step
 /// (`TourStep.requireInteraction`): instead of asking the user to swipe,
-/// the tour shows the gesture itself on the real `PageView`, and the page
-/// the user was reading never changes:
+/// the tour performs the gesture on the real `PageView`, at a pace the user
+/// can follow, and ends exactly where they were:
 ///
-/// - The slide covers [fraction] of the viewport — always less than half a
-///   page, so the page index (and any `onPageChanged` wiring in the app)
-///   never flips, whatever page the user is on. The starting page is not
-///   assumed to be zero; the exact starting offset is restored.
+/// - The turn covers a WHOLE page: the page visibly flips over and back,
+///   like a real swipe. The starting page is not assumed to be zero; the
+///   exact starting offset is restored afterwards.
+/// - Because the turn crosses the page boundary, a `PageView` fires its
+///   `onPageChanged` callback — once on the outward turn and once on the
+///   return. If your app reacts to `onPageChanged` (loading data, updating
+///   state), ignore those transient calls while the demo runs:
+///
+///   ```dart
+///   onPageChanged: (i) {
+///     if (_swipeDemo.isRunning) return; // tour demonstration, not the user
+///     // ...normal handling...
+///   },
+///   ```
+///
 /// - [cancel] restores the starting offset immediately: wire it to the
 ///   step's `onExit` (or the controller's skip/dispose paths) so a skipped
 ///   or interrupted tour never leaves the page half-turned.
-/// - At the scroll edge where the demonstrated direction has no room (e.g.
-///   demonstrating a left-to-right swipe while on the last page of an RTL
-///   reader), [demonstrate] is a safe no-op: it never shows the OPPOSITE
-///   gesture in place of the requested one. The step's indicator
-///   ([TourIndicator.swipeLeftToRight]) still shows the direction.
+/// - At the scroll edge where the demonstrated direction has no full page
+///   of room (e.g. demonstrating a left-to-right swipe while on the last
+///   page of an RTL reader), [demonstrate] is a safe no-op: it never shows
+///   the OPPOSITE gesture in place of the requested one. The step's
+///   indicator ([TourIndicator.swipeLeftToRight]) still shows the
+///   direction.
+/// - While it runs, [indicator] publishes where the step's swipe indicator
+///   should be; pass the demo to `TourStep.swipeDemo` and the orb on the
+///   spotlight glides WITH the page, rightward on the outward turn and
+///   leftward on the way back, instead of looping on its own.
 ///
 /// ```dart
 /// final _swipeDemo = PageSwipeDemo(
@@ -44,6 +88,7 @@ enum TourSwipeDirection {
 /// TourStep(
 ///   targetKey: _pageViewKey,
 ///   indicator: TourIndicator.swipeLeftToRight,
+///   swipeDemo: _swipeDemo,
 ///   onEnter: () => unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight)),
 ///   onExit: _swipeDemo.cancel,
 ///   // ...
@@ -57,38 +102,41 @@ class PageSwipeDemo {
   PageSwipeDemo({
     required this.pageController,
     required TickerProvider vsync,
-    this.fraction = 0.42,
-    this.moveDuration = const Duration(milliseconds: 600),
-    this.holdDuration = const Duration(milliseconds: 250),
+    this.turnDuration = const Duration(milliseconds: 850),
+    this.holdDuration = const Duration(milliseconds: 450),
     this.curve = Curves.easeInOutCubic,
-  })  : assert(fraction > 0 && fraction < 0.5,
-            'The slide must stay under half a page so the page index never changes.'),
-        _ctrl = AnimationController(vsync: vsync);
+  }) : _ctrl = AnimationController(vsync: vsync);
 
   /// The controller of the `PageView` to demonstrate on.
   final PageController pageController;
 
-  /// How far the page slides, as a fraction of the viewport width. Must be
-  /// under 0.5 so the settled page can never change. Default 0.42.
-  final double fraction;
+  /// Duration of each full-page turn, out and back. Default 850 ms — slow
+  /// enough that the flip reads as a real page turn, not a flicker.
+  final Duration turnDuration;
 
-  /// Duration of the outward slide; the return slide takes the same time.
-  final Duration moveDuration;
-
-  /// Pause at the farthest point before returning.
+  /// Pause on the turned-to page before returning. Default 450 ms.
   final Duration holdDuration;
 
-  /// Curve of both slides.
+  /// Curve of both turns.
   final Curve curve;
 
   final AnimationController _ctrl;
+  final ValueNotifier<PageSwipeDemoIndicator?> _indicator =
+      ValueNotifier(null);
 
   /// Starting pixels of the in-flight demonstration, or `null` when idle.
   double? _startPixels;
   double _delta = 0;
 
-  /// Whether a demonstration is currently running.
+  /// Whether a demonstration is currently running. Apps with an
+  /// `onPageChanged` handler should ignore page changes while this is true
+  /// (see the class docs).
   bool get isRunning => _startPixels != null;
+
+  /// Indicator state mirroring the running demonstration, `null` while
+  /// idle. The tour overlay listens to this when the step sets
+  /// `TourStep.swipeDemo`.
+  ValueListenable<PageSwipeDemoIndicator?> get indicator => _indicator;
 
   static double _signFor(AxisDirection axis, TourSwipeDirection direction) {
     // Scroll offset semantics follow the axis direction: with
@@ -108,9 +156,10 @@ class PageSwipeDemo {
     }
   }
 
-  /// Slides the page partway toward [direction], holds, and returns to the
+  /// Turns the page fully toward [direction], holds, and turns back to the
   /// exact offset the demonstration started from. No-op while another
-  /// demonstration is running or when the `PageView` is not attached.
+  /// demonstration is running, when the `PageView` is not attached, or when
+  /// the scroll edge leaves no full page of room in [direction].
   ///
   /// Completes when the page is back at its starting offset; a [cancel]
   /// mid-flight completes it early, after restoring the offset.
@@ -119,41 +168,59 @@ class PageSwipeDemo {
     final position = pageController.position;
     final start = position.pixels;
     final viewport = position.viewportDimension;
+    if (viewport <= 0) return;
     final sign = _signFor(position.axisDirection, direction);
-    final amount = viewport * fraction;
 
-    // Stay strictly inside the scroll range. If the demonstrated
-    // direction has no room at this edge (last page of an RTL reader,
-    // first page of an LTR one), do nothing rather than silently showing
-    // the opposite gesture — the caller asked for THIS direction.
-    final target = start + sign * amount;
-    final delta =
-        target.clamp(position.minScrollExtent, position.maxScrollExtent) -
-            start;
-    if (delta.abs() < amount * 0.25) return; // No room this way: no-op.
+    // A full turn needs a full page of room. If the demonstrated direction
+    // has none at this edge (last page of an RTL reader, first page of an
+    // LTR one), do nothing rather than silently showing the opposite
+    // gesture — the caller asked for THIS direction.
+    final delta = (start + sign * viewport)
+            .clamp(position.minScrollExtent, position.maxScrollExtent) -
+        start;
+    if (delta.abs() < viewport * 0.98) return; // No full page this way.
 
     _startPixels = start;
     _delta = delta;
-    final move = moveDuration.inMicroseconds;
+    final turn = turnDuration.inMicroseconds;
     final hold = holdDuration.inMicroseconds;
-    final total = 2 * move + hold;
+    final total = 2 * turn + hold;
     _ctrl.duration = Duration(microseconds: total);
+    final requestedLtr = direction == TourSwipeDirection.leftToRight;
 
-    double factorAt(double t) {
-      final us = (t * total).round();
+    double factorAt(int us) {
       if (us <= 0) return 0;
-      if (us < move) return curve.transform(us / move);
-      if (us < move + hold) return 1.0;
-      final back = ((us - move - hold) / move).clamp(0.0, 1.0);
+      if (us < turn) return curve.transform(us / turn);
+      if (us < turn + hold) return 1.0;
+      final back = ((us - turn - hold) / turn).clamp(0.0, 1.0);
       return 1.0 - curve.transform(back);
     }
 
+    double lastPixels = double.nan;
     void apply() {
+      final us = (_ctrl.value * total).round();
+      final f = factorAt(us);
       // The page can be disposed mid-demo (app popped the route); the
       // cancel path restores via jumpTo, so only drive while attached.
       if (pageController.hasClients) {
-        pageController.jumpTo(start + _delta * factorAt(_ctrl.value));
+        final px = start + _delta * f;
+        // Skip no-op jumps: an unneeded jumpTo restarts the scroll
+        // position's idle ballistic every frame of the hold.
+        if (px != lastPixels) {
+          lastPixels = px;
+          pageController.jumpTo(px);
+        }
       }
+      // The indicator follows the page itself: same eased fraction, and the
+      // travel direction flips on the return leg.
+      final onReturnLeg = us >= turn + hold;
+      _indicator.value = PageSwipeDemoIndicator(
+        fraction: requestedLtr ? f : 1.0 - f,
+        leftToRight: onReturnLeg ? !requestedLtr : requestedLtr,
+        opacity: us < turn
+            ? (us / (turn * 0.18)).clamp(0.0, 1.0)
+            : ((total - us) / (turn * 0.18)).clamp(0.0, 1.0),
+      );
     }
 
     _ctrl.addListener(apply);
@@ -169,17 +236,20 @@ class PageSwipeDemo {
       if (_startPixels == start) {
         if (pageController.hasClients) pageController.jumpTo(start);
         _startPixels = null;
+        _indicator.value = null;
       }
     }
   }
 
   /// Immediately restores the offset captured when the in-flight
-  /// [demonstrate] started. Safe to call when idle, from skip/finish
-  /// handlers and from `dispose`.
+  /// [demonstrate] started — even if the page has already committed to the
+  /// turned-to page. Safe to call when idle, from skip/finish handlers and
+  /// from `dispose`.
   void cancel() {
     final start = _startPixels;
     if (start == null) return;
     _startPixels = null; // First: the completing run must not re-restore.
+    _indicator.value = null;
     _ctrl.stop();
     if (pageController.hasClients) pageController.jumpTo(start);
   }
@@ -188,6 +258,7 @@ class PageSwipeDemo {
   /// `dispose`.
   void dispose() {
     cancel();
+    _indicator.dispose();
     _ctrl.dispose();
   }
 }

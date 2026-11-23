@@ -5,6 +5,18 @@ import 'package:spotlight_tour/spotlight_tour.dart';
 
 void main() => runApp(const DemoApp());
 
+/// كنترولر واحد لكل التطبيق. في تطبيق حقيقي ضعه في خدمة دائمة (GetX
+/// service أو Provider أو متغير عام كما هنا) وعمره عمر التطبيق، فلا تتخلص
+/// منه مع أي شاشة.
+final appTour = SpotlightTourController();
+
+/// يتذكّر الجولات المكتملة حتى لا تبدأ تلقائياً كل مرة.
+///
+/// هذا المخزن يعيش في الذاكرة فقط؛ في تطبيق حقيقي استبدله بمخزن دائم فوق
+/// `get_storage` أو `shared_preferences` كما في توثيق [TourCompletionStore]
+/// — الواجهة ثلاث دوال فقط.
+final tourStore = InMemoryTourCompletionStore();
+
 class DemoApp extends StatelessWidget {
   const DemoApp({super.key});
 
@@ -17,6 +29,10 @@ class DemoApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFF100E0C),
         textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'NotoNaskh'),
       ),
+      // الاستدعاء المركزي: مضيف واحد فوق الـ Navigator يخدم كل الصفحات.
+      // بعده يستطيع أي قسم تشغيل جولته بـ appTour.start(...) من أي مكان.
+      builder: (context, child) =>
+          SpotlightTourHost(controller: appTour, child: child!),
       home: const Directionality(
         textDirection: TextDirection.rtl,
         child: MushafDemoScreen(),
@@ -34,7 +50,7 @@ const String pageOneText =
 
 /// نص الصفحة الثانية.
 const String pageTwoText =
-    'وَاللَّهُ لَا إِلَٰهَ إِلَّا هُوَ ۚ لَيَجْمَعَنَّكُمْ إِلَىٰ يَوْمِ الْقِيَامَةِ لَا رَيْبَ فِيهِ ۗ وَمَنْ أَصْدَقُ مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾ '
+    'وَاللَّهُ لَا إِلَٰهَ إِلَّا هُوَ ۚ لَيَجْمَعُنَّكُمْ إِلَىٰ يَوْمِ الْقِيَامَةِ لَا رَيْبَ فِيهِ ۗ وَمَنْ أَصْدَقُ مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾ '
     'فَمَا لَكُمْ فِي الْمُنَافِقِينَ فِئَتَيْنِ وَاللَّهُ أَرْكَسَهُم بِمَا كَسَبُوا ۚ أَتُرِيدُونَ أَن تَهْدُوا مَنْ أَضَلَّ اللَّهُ ﴿٨٨﴾';
 
 /// نطاق الآية الثانية من الصفحة الأولى (تبدأ منتصف سطر وتنتهي منتصف سطر):
@@ -48,10 +64,9 @@ TextRange secondVerseOfPageOne() {
   return TextRange(start: start, end: end);
 }
 
-/// A small Quran-reader-like screen demonstrating an *interactive* tour:
-/// the tour demonstrates the page swipe by itself, opens the real
-/// verse-options sheet and highlights inside it — and going BACK to a step
-/// restores exactly the UI that step needs.
+/// شاشة المصحف. لاحظ: لا SpotlightTour حولها ولا كنترولر خاص بها — تبني
+/// خطواتها فقط وتشغّلها على الكنترولر المركزي، وتنتقل منها إلى صفحة أخرى
+/// دون أن يتأثر شيء.
 class MushafDemoScreen extends StatefulWidget {
   const MushafDemoScreen({super.key});
 
@@ -70,8 +85,13 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
 
   final _pageController = PageController();
 
-  /// عرض قلب الصفحة التلقائي: يحرّك الصفحة يميناً ثم يعيدها إلى موضعها
-  /// بالضبط، فلا تتغير الصفحة التي يقف عليها المستخدم.
+  /// عرض قلب الصفحة التلقائي: يقلب الصفحة كاملة يميناً بسرعة واضحة، يتوقف
+  /// لحظة، ثم يعيدها إلى موضع المستخدم بالضبط.
+  ///
+  /// ملاحظة: القلب الكامل يعبر حدود الصفحة، فيطلق PageView ردّ onPageChanged
+  /// مرتين (ذهاباً وعودة). إن كان تطبيقك يحدّث حالته من onPageChanged فتجاهل
+  /// النداءات أثناء العرض:
+  /// `if (_swipeDemo.isRunning) return;`
   late final _swipeDemo = PageSwipeDemo(
     pageController: _pageController,
     vsync: this,
@@ -79,39 +99,27 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
 
   bool _verseOptionsOpen = false;
 
-  /// يتذكّر أن الجولة عُرضت حتى لا تبدأ تلقائياً في كل مرة.
-  ///
-  /// هذا المخزن يعيش في الذاكرة فقط؛ في تطبيق حقيقي استبدله بمخزن دائم
-  /// فوق `get_storage` أو `shared_preferences` كما في توثيق
-  /// [TourCompletionStore] — الواجهة ثلاث دوال فقط.
-  final _tourStore = InMemoryTourCompletionStore();
-
-  late final SpotlightTourController _tour;
-
   @override
   void initState() {
     super.initState();
-    _tour = SpotlightTourController(
-      steps: _buildSteps(),
-      // معرّف ثابت لجولة هذا القسم: لكل قسم في التطبيق معرّفه وجولته.
-      tourId: 'mushaf',
-      completionStore: _tourStore,
-    );
-    // تبدأ تلقائياً أول مرة فقط؛ زر الإعادة في الأعلى يستدعي start() مباشرة.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tour.startOnce());
+    // جولة هذا القسم تبدأ تلقائياً أول مرة فقط، بمعرّفها الخاص على
+    // الكنترولر المركزي. زر الإعادة يستدعي start مباشرة.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      appTour.startOnce(tourId: 'mushaf', steps: _buildSteps());
+    });
   }
 
-  /// زر «أعد الجولة»: يمسح علامة الإكمال ثم يبدأ الجولة فوراً.
+  /// زر «أعد الجولة»: يمسح علامة الإكمال ثم يبدأ جولة هذا القسم فوراً.
   Future<void> _replayTour() async {
-    await _tourStore.reset('mushaf');
-    _tour.start();
+    await tourStore.reset('mushaf');
+    appTour.start(tourId: 'mushaf', steps: _buildSteps());
   }
 
   @override
   void dispose() {
     _swipeDemo.dispose();
     _pageController.dispose();
-    _tour.dispose();
+    // الكنترولر المركزي لا يُتخلَّى عنه هنا: عمره عمر التطبيق.
     super.dispose();
   }
 
@@ -152,8 +160,7 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
                     style: TextStyle(color: Color(0xFFE8E2D5))),
               ),
               const ListTile(
-                leading: Icon(Icons.headphones_outlined,
-                    color: Color(0x99FFFFFF)),
+                leading: Icon(Icons.headphones_outlined, color: Color(0x99FFFFFF)),
                 title: Text('استماع',
                     style: TextStyle(color: Color(0xFFE8E2D5))),
               ),
@@ -180,6 +187,15 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
     unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight));
   }
 
+  void _openSettings() {
+    unawaited(Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const Directionality(
+        textDirection: TextDirection.rtl,
+        child: SettingsDemoScreen(),
+      ),
+    )));
+  }
+
   List<TourStep> _buildSteps() => [
         const TourStep(
           title: 'جولة تفاعلية',
@@ -187,17 +203,20 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
               'هذه الجولة لا تشرح فقط، بل تنفّذ معك: سترى كيف تُقلب الصفحة، وستفتح الجولة خيارات الآية الحقيقية لتشرحها لك.',
         ),
         // خطوة تعليم قلب الصفحة: بدل أن نطلب من المستخدم أن يسحب بنفسه،
-        // تحرّك الجولة الصفحةَ يميناً ثم تُعيدها إلى موضعها بالضبط، وتبقى
-        // صفحته كما هي. (الطريقة القديمة — تمرير السحبة الحقيقية وانتظارها
-        // عبر interaction + requireInteraction — ما زالت متاحة لمن أرادها.)
+        // تقلب الجولة الصفحةَ كاملة يميناً ثم تُعيدها إلى موضعها بالضبط،
+        // وتبقى صفحته كما هي. (الطريقة القديمة — تمرير السحبة الحقيقية
+        // وانتظارها عبر interaction + requireInteraction — ما زالت متاحة
+        // لمن أرادها.)
         TourStep(
           targetKey: _pageViewKey,
           title: 'قلّب الصفحات',
           description:
-              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تتحرك الصفحة الآن أمامك ثم تعود إلى مكانها.',
+              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تقلب الصفحة نفسها الآن أمامك ثم تعود إلى مكانها.',
           icon: Icons.swipe_outlined,
-          // المؤشّر يتحرّك من اليسار إلى اليمين ليعلّم سحبة قلب الصفحة.
+          // المؤشّر يتبع حركة الصفحة نفسها: يميناً مع القلبة ويساراً مع
+          // العودة، بدل أن يدور في اتجاه واحد باستمرار.
           indicator: TourIndicator.swipeLeftToRight,
+          swipeDemo: _swipeDemo,
           onEnter: _demonstrateSwipe,
           // إن غادر المستخدم الخطوة (أو تخطّى الجولة) أثناء العرض، تُلغى
           // الحركة فوراً وتعود الصفحة إلى موضعها.
@@ -241,92 +260,112 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
         TourStep(
           targetKey: _navKey,
           title: 'أقسام التطبيق',
-          description: 'المحفوظات والقراءة والإعدادات، كلها من الشريط السفلي.',
+          description:
+              'المحفوظات والقراءة والإعدادات، كلها من الشريط السفلي. اضغط «التالي» وسنفتح الإعدادات ونكمل الجولة هناك.',
           icon: Icons.menu_book_outlined,
+          // خطوة تعبر الصفحات: «التالي» ينتقل فعلاً إلى الإعدادات، والخطوة
+          // التالية تبرز عنصراً هناك — كل ذلك على نفس الكنترولر المركزي.
+          onNext: _openSettings,
+        ),
+        TourStep(
+          targetKey: SettingsDemoScreen.themeKey,
+          title: 'متابعة في الإعدادات',
+          description:
+              'انتقلت الجولة معك إلى صفحة أخرى دون أي كنترولر إضافي. اضغط «التالي» للعودة وإنهاء الجولة.',
+          icon: Icons.settings_outlined,
+          // إن فتح المستخدم الإعدادات بنفسه قبل وصول الجولة، لا يُعاد فتحها.
+          onEnter: () {
+            if (!SettingsDemoScreen.isOpen) _openSettings();
+          },
+          onExit: () {
+            if (SettingsDemoScreen.isOpen) {
+              Navigator.of(context).pop();
+            }
+          },
         ),
         const TourStep(
           title: 'هذا كل شيء',
-          description: 'تجد هذه الجولة في الإعدادات متى ما أردت إعادتها.',
+          description: 'تجد جولة كل قسم في إعادته من صفحته متى ما أردت.',
         ),
       ];
 
   @override
   Widget build(BuildContext context) {
-    return SpotlightTour(
-      controller: _tour,
-      child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          title: const Text('النساء'),
-          actions: [
-            IconButton(
-              key: _searchKey,
-              icon: const Icon(Icons.search),
-              onPressed: () {},
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: const Text('النساء'),
+        actions: [
+          IconButton(
+            key: _searchKey,
+            icon: const Icon(Icons.search),
+            onPressed: () {},
+          ),
+          IconButton(
+            icon: const Icon(Icons.replay),
+            tooltip: 'إعادة الجولة',
+            onPressed: _replayTour,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            key: _pageViewKey,
+            child: PageView(
+              controller: _pageController,
+              children: [
+                _mushafPage(pageOneText, _pageTextKey),
+                _mushafPage(pageTwoText, null),
+              ],
             ),
-            IconButton(
-              icon: const Icon(Icons.replay),
-              tooltip: 'إعادة الجولة',
-              onPressed: _replayTour,
+          ),
+          Container(
+            key: _quickBarKey,
+            margin: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1815),
+              borderRadius: BorderRadius.circular(30),
             ),
-          ],
-        ),
-        body: Column(
-          children: [
-            Expanded(
-              key: _pageViewKey,
-              child: PageView(
-                controller: _pageController,
-                children: [
-                  _mushafPage(pageOneText, _pageTextKey),
-                  _mushafPage(pageTwoText, null),
-                ],
-              ),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Icon(Icons.mic_none, color: Color(0xFFB08E3F)),
+                Icon(Icons.bookmark_border, color: Color(0x99FFFFFF)),
+                Icon(Icons.copy_outlined, color: Color(0x99FFFFFF)),
+                Icon(Icons.share_outlined, color: Color(0x99FFFFFF)),
+                Icon(Icons.play_arrow, color: Color(0xFFB08E3F), size: 30),
+              ],
             ),
-            Container(
-              key: _quickBarKey,
-              margin: const EdgeInsets.symmetric(horizontal: 20),
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1815),
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  Icon(Icons.mic_none, color: Color(0xFFB08E3F)),
-                  Icon(Icons.bookmark_border, color: Color(0x99FFFFFF)),
-                  Icon(Icons.copy_outlined, color: Color(0x99FFFFFF)),
-                  Icon(Icons.share_outlined, color: Color(0x99FFFFFF)),
-                  Icon(Icons.play_arrow, color: Color(0xFFB08E3F), size: 30),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          key: _navKey,
-          backgroundColor: const Color(0xFF161411),
-          selectedIndex: 0,
-          destinations: const [
-            NavigationDestination(
-                icon: Icon(Icons.menu_book_outlined), label: 'المصحف'),
-            NavigationDestination(
-                icon: Icon(Icons.headphones_outlined), label: 'القراء'),
-            NavigationDestination(
-                icon: Icon(Icons.bookmark_border), label: 'المحفوظات'),
-            NavigationDestination(
-                icon: Icon(Icons.settings_outlined), label: 'الإعدادات'),
-          ],
-        ),
-        floatingActionButton: FloatingActionButton.small(
-          onPressed: () {
-            _closeVerseOptions();
-            _tour.start();
-          },
-          child: const Icon(Icons.replay),
-        ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        key: _navKey,
+        backgroundColor: const Color(0xFF161411),
+        selectedIndex: 0,
+        onDestinationSelected: (i) {
+          if (i == 3) _openSettings();
+        },
+        destinations: const [
+          NavigationDestination(
+              icon: Icon(Icons.menu_book_outlined), label: 'المصحف'),
+          NavigationDestination(
+              icon: Icon(Icons.headphones_outlined), label: 'القراء'),
+          NavigationDestination(
+              icon: Icon(Icons.bookmark_border), label: 'المحفوظات'),
+          NavigationDestination(
+              icon: Icon(Icons.settings_outlined), label: 'الإعدادات'),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.small(
+        onPressed: () {
+          _closeVerseOptions();
+          appTour.start(tourId: 'mushaf', steps: _buildSteps());
+        },
+        child: const Icon(Icons.replay),
       ),
     );
   }
@@ -350,6 +389,119 @@ class _MushafDemoScreenState extends State<MushafDemoScreen>
             ),
             textAlign: TextAlign.justify,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// صفحة ثانية مستقلة تماماً: جولتها الخاصة تعمل على نفس الكنترولر المركزي،
+/// وتبدأ أول مرة تُفتح فيها الصفحة. ويمكن لجولة قسم آخر أن تبرز عناصرها
+/// (كما تفعل جولة المصحف أعلاه).
+class SettingsDemoScreen extends StatefulWidget {
+  const SettingsDemoScreen({super.key});
+
+  /// مفتاح عنصر «المظهر» لتبرزه جولة المصحف العابرة للصفحات.
+  static final themeKey = GlobalKey();
+
+  /// هل الصفحة مفتوحة حالياً (تستخدمه الجولة حتى لا تعيد فتحها فوق نفسها).
+  static bool isOpen = false;
+
+  @override
+  State<SettingsDemoScreen> createState() => _SettingsDemoScreenState();
+}
+
+class _SettingsDemoScreenState extends State<SettingsDemoScreen> {
+  final _reciterKey = GlobalKey();
+  final _aboutKey = GlobalKey();
+
+  List<TourStep> _buildSteps() => [
+        TourStep(
+          targetKey: _reciterKey,
+          title: 'القارئ',
+          description: 'اختر قارئك المفضل للتلاوة من هنا.',
+          icon: Icons.headphones_outlined,
+        ),
+        TourStep(
+          targetKey: SettingsDemoScreen.themeKey,
+          title: 'المظهر',
+          description: 'بدّل بين الوضع الداكن والفاتح.',
+          icon: Icons.dark_mode_outlined,
+        ),
+        TourStep(
+          targetKey: _aboutKey,
+          title: 'عن التطبيق',
+          description: 'الإصدار والروابط المهمة هنا.',
+          icon: Icons.info_outline,
+        ),
+      ];
+
+  @override
+  void initState() {
+    super.initState();
+    SettingsDemoScreen.isOpen = true;
+    // جولة الإعدادات تبدأ تلقائياً أول مرة فقط — على نفس الكنترولر المركزي
+    // وبمعرّف مستقل عن جولة المصحف.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      appTour.startOnce(tourId: 'settings', steps: _buildSteps());
+    });
+  }
+
+  @override
+  void dispose() {
+    SettingsDemoScreen.isOpen = false;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        title: const Text('الإعدادات'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.replay),
+            tooltip: 'إعادة جولة الإعدادات',
+            onPressed: () async {
+              await tourStore.reset('settings');
+              appTour.start(tourId: 'settings', steps: _buildSteps());
+            },
+          ),
+        ],
+      ),
+      body: Directionality(
+        textDirection: TextDirection.rtl,
+        child: ListView(
+          children: [
+            ListTile(
+              key: _reciterKey,
+              leading:
+                  const Icon(Icons.headphones_outlined, color: Color(0xFFB08E3F)),
+              title: const Text('القارئ',
+                  style: TextStyle(color: Color(0xFFE8E2D5))),
+              subtitle: const Text('مشاري العفاسي',
+                  style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+              onTap: () {},
+            ),
+            SwitchListTile(
+              key: SettingsDemoScreen.themeKey,
+              secondary:
+                  const Icon(Icons.dark_mode_outlined, color: Color(0xFFB08E3F)),
+              title: const Text('المظهر الداكن',
+                  style: TextStyle(color: Color(0xFFE8E2D5))),
+              value: true,
+              onChanged: (_) {},
+            ),
+            ListTile(
+              key: _aboutKey,
+              leading:
+                  const Icon(Icons.info_outline, color: Color(0xFFB08E3F)),
+              title: const Text('عن التطبيق',
+                  style: TextStyle(color: Color(0xFFE8E2D5))),
+              onTap: () {},
+            ),
+          ],
         ),
       ),
     );

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
@@ -1113,23 +1114,34 @@ void main() {
 
   group('PageSwipeDemo', () {
     Widget demoApp(PageController pc,
-            {TextDirection direction = TextDirection.rtl, int pages = 5}) =>
+            {TextDirection direction = TextDirection.rtl,
+            int pages = 5,
+            void Function(int)? onPageChanged}) =>
         MaterialApp(
           home: Directionality(
             textDirection: direction,
             child: Scaffold(
               body: PageView(
                 controller: pc,
+                onPageChanged: onPageChanged,
                 children: [
                   for (var i = 0; i < pages; i++)
-                    Center(child: Text('صفحة $i')),
+                    Center(child: Text('\u0635\u0641\u062d\u0629 $i')),
                 ],
               ),
             ),
           ),
         );
 
-    testWidgets('returns to the exact original page, not page zero',
+    Future<void> runToEnd(WidgetTester tester, Future<void> done) async {
+      // The full demo (850 + 450 + 850 ms) plus slack.
+      for (var i = 0; i < 70; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await done;
+    }
+
+    testWidgets('turns a FULL page and returns to the exact original page, not page zero',
         (tester) async {
       final pc = PageController(initialPage: 2);
       addTearDown(pc.dispose);
@@ -1139,27 +1151,51 @@ void main() {
       addTearDown(demo.dispose);
 
       final start = pc.position.pixels;
+      final viewport = pc.position.viewportDimension;
       expect(pc.page!.round(), 2);
       final done = demo.demonstrate(TourSwipeDirection.leftToRight);
       await tester.pump();
 
       var maxMoved = 0.0;
-      for (var i = 0; i < 40; i++) {
+      var sawFlip = false;
+      for (var i = 0; i < 70; i++) {
         await tester.pump(const Duration(milliseconds: 50));
         final moved = pc.position.pixels - start;
         if (moved > maxMoved) maxMoved = moved;
-        // RTL, left-to-right swipe: content moves right => offset grows.
-        expect(pc.page!.round(), 2, reason: "a demonstration must never flip the page");
+        // RTL, left-to-right swipe: content moves right => offset grows,
+        // and a FULL turn commits to the next page before returning.
+        if (pc.page!.round() == 3) sawFlip = true;
       }
       await done;
-      expect(maxMoved, greaterThan(100),
-          reason: 'the page must visibly slide rightward (RTL: offset grows)');
+      expect(sawFlip, isTrue,
+          reason: 'a full page turn must reach the next page, not stop partway');
+      expect(maxMoved, moreOrLessEquals(viewport, epsilon: 1),
+          reason: 'the slide must cover a whole page');
       expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
       expect(pc.page!.round(), 2);
       expect(demo.isRunning, isFalse);
     });
 
-    testWidgets('LTR: a left-to-right demo slides the content rightward',
+    testWidgets('a full turn fires onPageChanged out and back (documented)',
+        (tester) async {
+      final changes = <int>[];
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc, onPageChanged: changes.add));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+      await runToEnd(tester, done);
+      // Crossing the page boundary fires the app's callback once per leg;
+      // apps should guard with `if (demo.isRunning) return;`.
+      expect(changes, [3, 2]);
+      expect(pc.page!.round(), 2);
+    });
+
+    testWidgets('LTR: a left-to-right demo slides the content rightward a full page',
         (tester) async {
       final pc = PageController(initialPage: 2);
       addTearDown(pc.dispose);
@@ -1169,24 +1205,27 @@ void main() {
       addTearDown(demo.dispose);
 
       final start = pc.position.pixels;
+      final viewport = pc.position.viewportDimension;
       final done = demo.demonstrate(TourSwipeDirection.leftToRight);
       await tester.pump();
 
       var minMoved = 0.0;
-      for (var i = 0; i < 40; i++) {
+      var sawFlip = false;
+      for (var i = 0; i < 70; i++) {
         await tester.pump(const Duration(milliseconds: 50));
         final moved = pc.position.pixels - start;
         if (moved < minMoved) minMoved = moved;
+        if (pc.page!.round() == 1) sawFlip = true;
       }
       await done;
-      // LTR: content moving right means the offset shrinks (previous page
-      // peeks in from the left) — without ever settling on it.
-      expect(minMoved, lessThan(-100));
+      // LTR: content moving right means the offset shrinks a full page.
+      expect(sawFlip, isTrue);
+      expect(minMoved, moreOrLessEquals(-viewport, epsilon: 1));
       expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
       expect(pc.page!.round(), 2);
     });
 
-    testWidgets('cancel restores the original offset immediately',
+    testWidgets('cancel mid-outbound, after the page committed, restores immediately',
         (tester) async {
       final pc = PageController(initialPage: 2);
       addTearDown(pc.dispose);
@@ -1198,16 +1237,85 @@ void main() {
       final start = pc.position.pixels;
       final done = demo.demonstrate(TourSwipeDirection.leftToRight);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      expect(pc.position.pixels - start, greaterThan(50));
+      // Wait until the page has fully committed to the next page.
+      for (var i = 0; i < 40 && pc.page!.round() != 3; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(pc.page!.round(), 3);
 
       demo.cancel();
       expect(demo.isRunning, isFalse);
       expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(pc.page!.round(), 2);
       await done; // the in-flight run completes early, without re-restoring
       await tester.pump(const Duration(milliseconds: 100));
       expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
       expect(pc.page!.round(), 2);
+    });
+
+    testWidgets('cancel during the return leg restores immediately',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      final viewport = pc.position.viewportDimension;
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+      // Outbound: 850 ms turn + 450 ms hold. Land mid-return.
+      for (var i = 0; i < 31; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      final mid = pc.position.pixels - start;
+      expect(mid, greaterThan(0));
+      expect(mid, lessThan(viewport));
+
+      demo.cancel();
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(pc.page!.round(), 2);
+      await done;
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+    });
+
+    testWidgets('indicator mirrors each leg: demonstrated direction out, opposite back',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final seen = <PageSwipeDemoIndicator>[];
+      demo.indicator.addListener(() {
+        final v = demo.indicator.value;
+        if (v != null) seen.add(v);
+      });
+      expect(demo.indicator.value, isNull);
+
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+      await runToEnd(tester, done);
+      expect(demo.indicator.value, isNull,
+          reason: 'the indicator clears when the demo ends');
+
+      final outward = seen.where((s) => s.leftToRight).toList();
+      final returning = seen.where((s) => !s.leftToRight).toList();
+      expect(outward, isNotEmpty);
+      expect(returning, isNotEmpty,
+          reason: 'the return leg must show the opposite direction');
+      // The direction only flips once the page is (nearly) fully turned.
+      expect(returning.first.fraction, greaterThan(0.9));
+      // The orb crosses the whole target with the page.
+      expect(seen.map((s) => s.fraction).reduce(math.max), greaterThan(0.95));
+      // Outward fractions climb, return fractions descend.
+      expect(outward.last.fraction, greaterThan(outward.first.fraction));
+      expect(returning.last.fraction, lessThan(returning.first.fraction));
     });
 
     testWidgets('at the scroll edge it never shows the opposite gesture',
@@ -1222,7 +1330,7 @@ void main() {
       final start = pc.position.pixels;
       expect(start, pc.position.maxScrollExtent);
       // RTL last page: a left-to-right demonstration has no room. It must
-      // be a safe no-op — never a right-to-left slide in disguise.
+      // be a safe no-op — never a right-to-left turn in disguise.
       await demo.demonstrate(TourSwipeDirection.leftToRight);
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
@@ -1230,6 +1338,7 @@ void main() {
       expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
       expect(pc.page!.round(), 4);
       expect(demo.isRunning, isFalse);
+      expect(demo.indicator.value, isNull);
     });
 
     testWidgets('single-page view: demonstration is a no-op', (tester) async {

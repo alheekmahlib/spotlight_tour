@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import 'page_swipe_demo.dart';
+
 /// Shape of the spotlight cutout around a target widget.
 enum TourTargetShape {
   /// Rounded rectangle (see [TourStep.borderRadius]).
@@ -75,6 +77,7 @@ class TourStep {
     this.pulseAlignment = Alignment.center,
     this.showPulse = true,
     this.indicator = TourIndicator.pulse,
+    this.swipeDemo,
     this.onEnter,
     this.onNext,
     this.onExit,
@@ -131,6 +134,16 @@ class TourStep {
   /// Honours [showPulse], `SpotlightTourTheme.pulseRepeatCount` and the
   /// system's reduced-motion setting exactly like the pulse.
   final TourIndicator indicator;
+
+  /// The [PageSwipeDemo] performing this step's page turn. When set (and
+  /// [indicator] is a swipe direction), the indicator stops looping on its
+  /// own while the demo runs and mirrors the real page instead: the orb
+  /// glides with the turn in the demonstrated direction, then back with
+  /// the return turn — its direction always matches the page's motion.
+  /// While the demo is idle (before it starts, under reduced motion, or at
+  /// a scroll edge with no room) the indicator falls back to the looping
+  /// [indicator] animation.
+  final PageSwipeDemo? swipeDemo;
 
   /// Runs when this step becomes active, *before* its target is resolved.
   ///

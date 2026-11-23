@@ -3,6 +3,7 @@
 library;
 
 export 'src/page_swipe_demo.dart';
+export 'src/spotlight_tour_host.dart';
 export 'src/tour_completion.dart';
 export 'src/tour_controller.dart';
 export 'src/tour_labels.dart';

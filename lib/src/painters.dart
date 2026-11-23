@@ -210,14 +210,38 @@ class PulsePainter extends CustomPainter {
 /// this"). Painted above the cutout but below the card, always inside an
 /// `IgnorePointer`: the real swipe still passes through to the app.
 class SwipePainter extends CustomPainter {
-  const SwipePainter({required this.progress, required this.leftToRight});
+  const SwipePainter({required this.progress, required this.leftToRight})
+      : syncFraction = null,
+        syncOpacity = null;
+
+  /// Driven directly by a running `PageSwipeDemo` (see
+  /// `TourStep.swipeDemo`): [fraction] is the orb's head position across
+  /// the target (0 = left edge, 1 = right edge), [opacity] its fade, and
+  /// [leftToRight] the CURRENT leg's travel direction — the demonstrated
+  /// direction on the outward turn, the opposite on the way back.
+  const SwipePainter.synced({
+    required double fraction,
+    required this.leftToRight,
+    required double opacity,
+  })  : progress = 0,
+        syncFraction = fraction,
+        syncOpacity = opacity;
 
   /// 0..1, repeating.
   final double progress;
 
   /// True to glide from the left edge to the right edge, false for the
-  /// opposite direction.
+  /// opposite direction. In synced mode this is the current leg's
+  /// direction, which flips between the outward turn and the return.
   final bool leftToRight;
+
+  /// Direct head position (0..1 across the target) in synced mode, else
+  /// `null` and the position comes from [progress].
+  final double? syncFraction;
+
+  /// Direct opacity (0..1) in synced mode, else `null` and the opacity
+  /// comes from [progress].
+  final double? syncOpacity;
 
   /// Where the travel happens inside one cycle: the orb fades in, crosses,
   /// then fades out, so the repeating cycle reads as separate swipes.
@@ -252,9 +276,10 @@ class SwipePainter extends CustomPainter {
     final x1 = size.width - margin;
     if (x1 <= x0) return;
     final centerY = size.height / 2;
-    final fraction = headFraction(progress, leftToRight: leftToRight);
+    final fraction =
+        syncFraction ?? headFraction(progress, leftToRight: leftToRight);
     final headX = lerpDouble(x0, x1, fraction)!;
-    final opacity = headOpacity(progress);
+    final opacity = syncOpacity ?? headOpacity(progress);
     if (opacity <= 0) return;
 
     // Short trail behind the head, against the direction of travel.
@@ -283,5 +308,7 @@ class SwipePainter extends CustomPainter {
   @override
   bool shouldRepaint(SwipePainter oldDelegate) =>
       oldDelegate.progress != progress ||
-      oldDelegate.leftToRight != leftToRight;
+      oldDelegate.leftToRight != leftToRight ||
+      oldDelegate.syncFraction != syncFraction ||
+      oldDelegate.syncOpacity != syncOpacity;
 }

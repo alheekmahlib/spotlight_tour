@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:spotlight_tour/spotlight_tour.dart';
 import 'package:spotlight_tour/src/painters.dart';
 
+import 'central_demo.dart';
+
 Future<void> loadFonts() async {
   Future<ByteData> read(String path) async =>
       ByteData.view(File(path).readAsBytesSync().buffer);
@@ -166,6 +168,7 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen>
               'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تتحرك الصفحة الآن أمامك ثم تعود إلى مكانها.',
           icon: Icons.swipe_outlined,
           indicator: TourIndicator.swipeLeftToRight,
+          swipeDemo: _swipeDemo,
           onEnter: _demonstrateSwipe,
           onExit: _swipeDemo.cancel,
         ),
@@ -354,9 +357,9 @@ void main() {
     await expectLater(find.byType(MaterialApp),
         matchesGoldenFile('goldens/tour_stagger.png'));
 
-    // The automatic demonstration really moves the page rightward without
-    // committing a page change. Capture it mid-slide: the page content is
-    // visibly displaced while the page index stays 0.
+    // The automatic demonstration really turns the page rightward: a full
+    // page turn out and back. Capture it mid-turn: the page content is
+    // visibly displaced by the slide.
     var moved = 0.0;
     for (var i = 0; i < 80; i++) {
       moved = pageController.position.pixels - startPixels;
@@ -365,8 +368,6 @@ void main() {
     }
     expect(moved, greaterThan(60),
         reason: 'the auto demonstration should visibly slide the page');
-    expect(pageController.page!.round(), 0,
-        reason: 'the demonstration must never commit a page change');
     await expectLater(find.byType(MaterialApp),
         matchesGoldenFile('goldens/tour_swipe_demo.png'));
 
@@ -377,8 +378,8 @@ void main() {
         .widgetList<CustomPaint>(find.byType(CustomPaint))
         .map((w) => w.painter)
         .whereType<SwipePainter>()
-        .firstOrNull
-        ?.progress;
+        .map((p) => p.syncFraction ?? p.progress)
+        .firstOrNull;
     Future<void> pumpUntilSwipeIn(double lo, double hi) async {
       for (var i = 0; i < 60; i++) {
         final p = swipeProgress();
@@ -394,7 +395,20 @@ void main() {
     await pumpUntilSwipeIn(0.68, 0.80); // orb past two thirds, moving right
     await expectLater(find.byType(MaterialApp),
         matchesGoldenFile('goldens/tour_swipe_move.png'));
-    await settle(tester);
+
+    // The turn is FULL: the page really flips to the next page, holds, and
+    // turns back. Watch the whole cycle.
+    var sawFullTurn = false;
+    for (var i = 0; i < 40; i++) {
+      if (pageController.page!.round() == 1) sawFullTurn = true;
+      await tester.pump(const Duration(milliseconds: 100));
+      if (sawFullTurn &&
+          (pageController.position.pixels - startPixels).abs() < 0.01) {
+        break; // fully returned to the user's exact spot
+      }
+    }
+    expect(sawFullTurn, isTrue,
+        reason: 'the demonstration must turn a FULL page, not a partial slide');
 
     // The demonstration has ended: the page is back EXACTLY where the user
     // left it (page 0, offset 0 — but the mechanism restores any page, see
@@ -525,6 +539,57 @@ void main() {
     await settle(tester);
     await expectLater(
         find.byType(MaterialApp), matchesGoldenFile('goldens/tour_done.png'));
+  });
+
+  testWidgets('central host goldens: one tour crossing routes',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final keys = CentralKeys();
+    final tour = SpotlightTourController();
+    await tester.pumpWidget(CentralDemoApp(keys: keys, tour: tour));
+    await tester.pump();
+
+    tour.start(steps: centralSteps(keys, CentralMushafPage(keys: keys)));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pump(const Duration(milliseconds: 300));
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_host_intro.png'));
+
+    // Verse contour on page A, through the central host.
+    await tester.tap(find.text('ابدأ الجولة'));
+    await tester.pump();
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_host_verse.png'));
+
+    // To the bottom-bar step, then the tour pushes the settings route
+    // itself and highlights there — same controller, same run, another
+    // route entirely.
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    for (var i = 0; i < 15; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('المظهر الداكن'), findsOneWidget);
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_host_settings.png'));
+
+    tour.skip();
+    await tester.pump();
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
   });
 
   testWidgets('contour joins golden: varied widths, heights, mixed direction',

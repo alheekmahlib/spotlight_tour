@@ -1,6 +1,6 @@
 name: spotlight_tour
 description: A reusable, RTL-friendly feature tour (coach marks) package with a glowing spotlight highlight, pulse animation and an animated tooltip card, matching modern Arabic app tours.
-version: 0.4.0
+version: 0.4.1
 publish_to: none
 homepage:
 

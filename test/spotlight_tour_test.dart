@@ -555,6 +555,184 @@ void main() {
     );
   }
 
+  testWidgets('textLines contour tracks a target still moving after activation',
+      (tester) async {
+    // The tour advances while the page slide is still settling: the first
+    // resolution catches the text mid-slide, and the contour must follow it
+    // to its final position instead of freezing offset (0.4.0 regression).
+    const text =
+        'lorem ipsum dolor sit amet consectetur adipiscing elit sed do '
+        'eiusmod tempor incididunt ut labore et dolore magna aliqua enim';
+    final textKey = GlobalKey();
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: textKey,
+        shape: TourTargetShape.textLines,
+        title: 'النص',
+        description: 'إطار متدرج حول السطور',
+        showPulse: false,
+      ),
+    ]);
+
+    var dx = -100.0; // the "page" starts mid-slide, shifted left
+    late StateSetter slide;
+    await tester.pumpWidget(MaterialApp(
+      home: SpotlightTour(
+        controller: controller,
+        child: Scaffold(
+          body: StatefulBuilder(builder: (context, setState) {
+            slide = setState;
+            return Center(
+              child: Transform.translate(
+                offset: Offset(dx, 0),
+                child: SizedBox(
+                  width: 200,
+                  child: Text(text, key: textKey),
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
+    ));
+    controller.start();
+    await tester.pump();
+
+    SpotlightPainter spotPainter() => tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+
+    // The expected outline, derived the way the package derives it: the
+    // selection's rendered glyph boxes (which may legitimately overhang the
+    // paragraph's layout width at wrap points), padded by the step's
+    // targetPadding. Glyph metrics are dx-independent, so the expectation
+    // tracks the text wherever it slides.
+    Rect expectedOutline() {
+      final para =
+          textKey.currentContext!.findRenderObject()! as RenderParagraph;
+      final origin = para.localToGlobal(Offset.zero);
+      final boxes = para.getBoxesForSelection(
+          const TextSelection(baseOffset: 0, extentOffset: text.length));
+      var left = double.infinity, top = double.infinity;
+      var right = double.negativeInfinity, bottom = double.negativeInfinity;
+      for (final b in boxes) {
+        left = left < b.left + origin.dx ? left : b.left + origin.dx;
+        top = top < b.top + origin.dy ? top : b.top + origin.dy;
+        right = right > b.right + origin.dx ? right : b.right + origin.dx;
+        bottom = bottom > b.bottom + origin.dy ? bottom : b.bottom + origin.dy;
+      }
+      return Rect.fromLTRB(left - 8, top - 8, right + 8, bottom + 8);
+    }
+
+    void expectOutlineFollowsText(Rect actual, Rect expected) {
+      expect(actual.left, moreOrLessEquals(expected.left, epsilon: 2));
+      expect(actual.top, moreOrLessEquals(expected.top, epsilon: 2));
+      expect(actual.right, moreOrLessEquals(expected.right, epsilon: 2));
+      expect(actual.bottom, moreOrLessEquals(expected.bottom, epsilon: 2));
+    }
+
+    await tester.pump(const Duration(milliseconds: 500));
+    // Mid-slide: the contour sits on the text's CURRENT (shifted) position.
+    final midExpected = expectedOutline();
+    final midBounds = spotPainter().targetPath!.getBounds();
+    expectOutlineFollowsText(midBounds, midExpected);
+
+    // The page settles in steps, like a PageView slide decelerating.
+    for (final step in [-60.0, -25.0, -8.0, 0.0]) {
+      slide(() => dx = step);
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    await tester.pump(const Duration(seconds: 1));
+
+    // Settled: the contour followed the text to its FINAL position, 100px
+    // to the right of where it was first resolved.
+    final finalBounds = spotPainter().targetPath!.getBounds();
+    expectOutlineFollowsText(finalBounds, expectedOutline());
+    expect(finalBounds.right - midBounds.right,
+        moreOrLessEquals(100, epsilon: 2));
+  });
+
+  test('SwipePainter head glides in the requested direction and fades',
+      () {
+    // Left to right: starts at the left edge, ends at the right edge.
+    expect(SwipePainter.headFraction(0.0, leftToRight: true), 0.0);
+    expect(SwipePainter.headFraction(0.82, leftToRight: true), 1.0);
+    final early = SwipePainter.headFraction(0.30, leftToRight: true);
+    final late = SwipePainter.headFraction(0.60, leftToRight: true);
+    expect(late, greaterThan(early));
+    // Right to left mirrors the motion.
+    expect(SwipePainter.headFraction(0.0, leftToRight: false), 1.0);
+    expect(SwipePainter.headFraction(0.82, leftToRight: false), 0.0);
+    expect(SwipePainter.headFraction(0.60, leftToRight: false),
+        lessThan(SwipePainter.headFraction(0.30, leftToRight: false)));
+    // The cycle fades in and out so repeats read as separate swipes.
+    expect(SwipePainter.headOpacity(0.0), 0.0);
+    expect(SwipePainter.headOpacity(0.5), 1.0);
+    expect(SwipePainter.headOpacity(1.0), 0.0);
+  });
+
+  testWidgets('swipe indicator paints instead of the pulse, then rests',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: keys[0],
+        title: 'اسحب',
+        description: 'اسحب الصفحة للمتابعة',
+        indicator: TourIndicator.swipeLeftToRight,
+      ),
+    ]);
+
+    List<SwipePainter> swipePainters(WidgetTester tester) => tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SwipePainter>()
+        .toList();
+
+    await tester.pumpWidget(buildAppWith(controller, keys));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(swipePainters(tester), isNotEmpty);
+    expect(swipePainters(tester).first.leftToRight, isTrue);
+    expect(pulsePainters(tester), isEmpty); // not both at once
+
+    // Bounded like the pulse: after 4 cycles it rests.
+    await tester.pump(const Duration(milliseconds: 6500));
+    await tester.pump();
+    expect(swipePainters(tester), isEmpty);
+    expect(find.text('1 من 1'), findsOneWidget); // tour still alive
+  });
+
+  testWidgets('reduced motion suppresses the swipe indicator too',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: keys[0],
+        title: 'اسحب',
+        description: 'اسحب الصفحة للمتابعة',
+        indicator: TourIndicator.swipeRightToLeft,
+      ),
+    ]);
+
+    await tester.pumpWidget(
+        buildAppWith(controller, keys, disableAnimations: true));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final swipes = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SwipePainter>()
+        .toList();
+    expect(swipes, isEmpty);
+  });
+
   testWidgets('bounded pulse rests after its cycles', (tester) async {
     final keys = List.generate(3, (_) => GlobalKey());
     final controller = SpotlightTourController(steps: stepsFor(keys));

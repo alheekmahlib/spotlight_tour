@@ -173,6 +173,8 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
           description:
               'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً. جرّب الآن: اسحب الصفحة لتنتقل الجولة معك.',
           icon: Icons.swipe_outlined,
+          // المؤشّر يتحرّك من اليسار إلى اليمين ليعلّم سحبة قلب الصفحة.
+          indicator: TourIndicator.swipeLeftToRight,
           interaction: TourTargetInteraction.swipe,
           requireInteraction: true,
           interactionHint: 'اسحب الصفحة للمتابعة',

@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:spotlight_tour/spotlight_tour.dart';
+import 'package:spotlight_tour/src/painters.dart';
 
 Future<void> loadFonts() async {
   Future<ByteData> read(String path) async =>
@@ -131,6 +133,7 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen> {
           description:
               'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً. جرّب الآن: اسحب الصفحة لتنتقل الجولة معك.',
           icon: Icons.swipe_outlined,
+          indicator: TourIndicator.swipeLeftToRight,
           interaction: TourTargetInteraction.swipe,
           requireInteraction: true,
           interactionHint: 'اسحب الصفحة للمتابعة',
@@ -320,22 +323,84 @@ void main() {
     await tester.pump(const Duration(milliseconds: 170)); // mid entrance
     await expectLater(find.byType(MaterialApp),
         matchesGoldenFile('goldens/tour_stagger.png'));
-    await settle(tester);
+    // The swipe indicator demonstrates the gesture itself: an orb gliding
+    // from the left edge of the page to the right. Capture it at two
+    // deterministic points of its cycle; the orb must visibly move right.
+    double? swipeProgress() => tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SwipePainter>()
+        .firstOrNull
+        ?.progress;
+    Future<void> pumpUntilSwipeIn(double lo, double hi) async {
+      for (var i = 0; i < 60; i++) {
+        final p = swipeProgress();
+        if (p != null && p >= lo && p <= hi) return;
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      fail('swipe indicator never entered cycle range $lo..$hi');
+    }
+
+    await pumpUntilSwipeIn(0.30, 0.42); // orb around a third of the way
     await expectLater(
         find.byType(MaterialApp), matchesGoldenFile('goldens/tour_swipe.png'));
+    await pumpUntilSwipeIn(0.68, 0.80); // orb past two thirds, moving right
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_swipe_move.png'));
+    await settle(tester);
 
     // A REAL drag inside the spotlight passes through the backdrop to the
     // PageView: the page turns and the app's onPageChanged advances the tour.
     await tester.drag(find.byKey(keys.pageView), const Offset(320, 0)); // RTL: content moves with the finger toward the right to reveal page 2
     await tester.pump();
     // Mid-morph: the highlight glides from the PageView rect to the verse's
-    // text-lines contour, cross-fading the border between the two shapes.
-    await tester.pump(const Duration(milliseconds: 250));
-    await tester.pump(const Duration(milliseconds: 250));
+    // text-lines contour, morphing the contour line by line (no rectangular
+    // intermediate, no cross-fade) while the page itself is still sliding.
+    // Wait deterministically for the glide to be in flight: clearly smaller
+    // than the whole page, clearly larger than the landed verse contour.
+    Rect spotBounds() => tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first
+        .targetPath!
+        .getBounds();
+    var sb = spotBounds();
+    for (var i = 0; i < 60 && (sb.height > 420 || sb.height < 180); i++) {
+      await tester.pump(const Duration(milliseconds: 40));
+      sb = spotBounds();
+    }
+    expect(sb.height, inInclusiveRange(180, 420));
     await expectLater(find.byType(MaterialApp),
         matchesGoldenFile('goldens/tour_contour_morph.png'));
+    await tester.pump(const Duration(milliseconds: 150));
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_contour_land.png'));
     await settle(tester, 18);
     expect(find.text('خيارات الآية'), findsOneWidget);
+    // Regression guard for the 0.4.0 "offset verse frame": the tour advanced
+    // while the page was still sliding, and the settled contour must sit on
+    // the text's FINAL position, not frozen at its mid-slide one.
+    final spotPainter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    final settledBounds = spotPainter.targetPath!.getBounds();
+    final versePara =
+        keys.pageText.currentContext!.findRenderObject()! as RenderParagraph;
+    final verseOrigin = versePara.localToGlobal(Offset.zero);
+    final range = firstVerseOfPageTwo();
+    final verseBoxes = versePara.getBoxesForSelection(
+        TextSelection(baseOffset: range.start, extentOffset: range.end));
+    var expLeft = double.infinity, expRight = double.negativeInfinity;
+    for (final b in verseBoxes) {
+      expLeft = expLeft < b.left + verseOrigin.dx ? expLeft : b.left + verseOrigin.dx;
+      expRight =
+          expRight > b.right + verseOrigin.dx ? expRight : b.right + verseOrigin.dx;
+    }
+    expect(settledBounds.left, moreOrLessEquals(expLeft - 8, epsilon: 2));
+    expect(settledBounds.right, moreOrLessEquals(expRight + 8, epsilon: 2));
     await expectLater(
         find.byType(MaterialApp), matchesGoldenFile('goldens/tour_verse.png'));
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
@@ -12,16 +13,23 @@ import 'tour_theme.dart';
 
 /// The resolved on-screen outline of a step's target.
 class _SpotTarget {
-  const _SpotTarget({required this.bounds, this.path});
+  const _SpotTarget({required this.bounds, this.path, required this.lines});
 
-  /// Bounding shape of the target: used for the morph animation, the pulse
-  /// orb and the card placement.
+  /// Bounding shape of the target: used for the morph animation, the
+  /// indicator and the card placement.
   final RRect bounds;
 
   /// Precise cutout outline, or `null` to cut out [bounds]. Set for
   /// [TourTargetShape.textLines] steps: a union of one rounded rect per
   /// rendered text line, forming the stepped contour around the selection.
   final Path? path;
+
+  /// The outline as a list of rounded rects, top to bottom: one entry per
+  /// rendered text line for [TourTargetShape.textLines] steps, a single
+  /// entry ([bounds]) for rect/circle targets. The morph animates these
+  /// line by line, so a text contour keeps its stepped, text-hugging shape
+  /// through the whole glide instead of travelling as a plain rectangle.
+  final List<RRect> lines;
 }
 
 /// Wraps a screen and shows the guided tour above it when its
@@ -105,6 +113,17 @@ class _SpotlightTourState extends State<SpotlightTour>
   _SpotTarget? _target;
   RRect? _morphFrom;
   RRect? _morphTo;
+  List<RRect>? _morphFromLines;
+  List<RRect>? _morphToLines;
+
+  /// Target-settling tracker: after a step activates, its target can still
+  /// be moving (the page slide that advanced the tour is still settling, a
+  /// sheet still animating in). The tracker re-resolves the outline every
+  /// frame until it stays put for a few frames, so the highlight never
+  /// freezes mid-gesture, offset from the real widget.
+  int _settleStableFrames = 0;
+  DateTime? _settleDeadline;
+  int _settleGeneration = 0;
 
   /// Measured card size, used to place the card without overflowing.
   Size _cardSize = const Size(320, 220);
@@ -325,20 +344,26 @@ class _SpotlightTourState extends State<SpotlightTour>
       if (aborted()) return;
 
       _target = toTarget;
+      // The target can still be moving (the page slide or sheet animation
+      // that advanced the tour is still settling): keep the outline glued
+      // to the real widget instead of freezing it mid-gesture.
+      _trackTargetUntilSettled(toStep);
       if (!initial) {
-        // The morph animates the bounding shape between steps. When the
-        // destination is a text-lines contour, the border cross-fades to
-        // the precise stepped outline during the last part of the glide
-        // (see SpotlightPainter.contourBlend); the cutout itself switches
-        // to the contour when the glide ends (there is no meaningful lerp
-        // between contours with different line counts).
+        // The morph animates the outline between steps line by line (see
+        // _animatedPath): a text-lines contour keeps its stepped,
+        // text-hugging shape through the whole glide instead of travelling
+        // as a plain rectangle and snapping at the end.
         _morphFrom = fromTarget?.bounds;
         _morphTo = toTarget?.bounds;
+        _morphFromLines = fromTarget?.lines;
+        _morphToLines = toTarget?.lines;
         _morphCtrl.duration = _morphDuration;
         _entry?.markNeedsBuild();
         unawaited(_morphCtrl.forward(from: 0).then((_) {
           _morphFrom = null;
           _morphTo = null;
+          _morphFromLines = null;
+          _morphToLines = null;
           if (mounted) _entry?.markNeedsBuild();
         }));
         _cardCtrl.duration = _cardEnter;
@@ -417,10 +442,11 @@ class _SpotlightTourState extends State<SpotlightTour>
       final side = rect.longestSide;
       final square =
           Rect.fromCenter(center: rect.center, width: side, height: side);
-      return _SpotTarget(
-          bounds: RRect.fromRectAndRadius(square, Radius.circular(side / 2)));
+      final r = RRect.fromRectAndRadius(square, Radius.circular(side / 2));
+      return _SpotTarget(bounds: r, lines: [r]);
     }
-    return _SpotTarget(bounds: RRect.fromRectAndRadius(rect, radius));
+    final r = RRect.fromRectAndRadius(rect, radius);
+    return _SpotTarget(bounds: r, lines: [r]);
   }
 
   /// Builds the stepped contour around [TourStep.textRange] (or the whole
@@ -480,13 +506,15 @@ class _SpotlightTourState extends State<SpotlightTour>
     }
     Path? union;
     Rect? bounding;
+    final lineRRects = <RRect>[];
     for (final r in padded) {
       final inflated =
           step.targetPadding.inflateRect(r).intersect(overlayBounds);
       if (inflated.isEmpty) continue;
       bounding = bounding == null ? inflated : bounding.expandToInclude(inflated);
-      final linePath = Path()
-        ..addRRect(RRect.fromRectAndRadius(inflated, radius));
+      final lineRRect = RRect.fromRectAndRadius(inflated, radius);
+      lineRRects.add(lineRRect);
+      final linePath = Path()..addRRect(lineRRect);
       // Boolean union (not addPath): overlapping line rects must merge into
       // a single outline, otherwise the even-odd scrim cutout would cancel
       // where two subpaths overlap.
@@ -496,7 +524,70 @@ class _SpotlightTourState extends State<SpotlightTour>
     }
     if (bounding == null || union == null) return null;
     return _SpotTarget(
-        bounds: RRect.fromRectAndRadius(bounding, radius), path: union);
+        bounds: RRect.fromRectAndRadius(bounding, radius),
+        path: union,
+        lines: lineRRects);
+  }
+
+  /// Starts (or restarts) the post-activation settling tracker for [step].
+  ///
+  /// Steps often become active while their target is still moving: the tour
+  /// advances from `onPageChanged` while the `PageView` slide is still
+  /// settling, or a sheet opened by [TourStep.onEnter] is still animating.
+  /// Resolving once at activation freezes the highlight at a mid-gesture
+  /// position (the 0.4.0 "offset verse frame" bug), so the tracker
+  /// re-resolves every frame until the outline stays put for a few frames.
+  void _trackTargetUntilSettled(TourStep step) {
+    if (step.targetKey == null) return;
+    final generation = ++_settleGeneration;
+    _settleStableFrames = 0;
+    _settleDeadline = DateTime.now().add(const Duration(seconds: 2));
+    void tick() {
+      if (!mounted || _entry == null) return;
+      if (generation != _settleGeneration) return;
+      final c = widget.controller;
+      if (c.status != TourStatus.running || c.index != _displayedIndex) {
+        return;
+      }
+      final deadline = _settleDeadline;
+      if (deadline == null || DateTime.now().isAfter(deadline)) return;
+      final fresh = _resolveTarget(step);
+      if (fresh != null && !_sameOutline(fresh, _target)) {
+        _target = fresh;
+        _settleStableFrames = 0;
+        // A morph still in flight chases the moving target.
+        if (_morphTo != null) {
+          _morphTo = fresh.bounds;
+          _morphToLines = fresh.lines;
+        }
+        _entry?.markNeedsBuild();
+      } else if (fresh != null) {
+        _settleStableFrames++;
+        if (_settleStableFrames >= 4) return; // settled
+      }
+      // fresh == null: the target is (transiently) unmounted; keep waiting.
+      WidgetsBinding.instance.addPostFrameCallback((_) => tick());
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => tick());
+  }
+
+  static bool _sameOutline(_SpotTarget a, _SpotTarget? b) {
+    if (b == null) return false;
+    if (!_sameRRect(a.bounds, b.bounds)) return false;
+    if (a.lines.length != b.lines.length) return false;
+    for (var i = 0; i < a.lines.length; i++) {
+      if (!_sameRRect(a.lines[i], b.lines[i])) return false;
+    }
+    return true;
+  }
+
+  static bool _sameRRect(RRect a, RRect b) {
+    const e = 0.5;
+    return (a.left - b.left).abs() <= e &&
+        (a.top - b.top).abs() <= e &&
+        (a.right - b.right).abs() <= e &&
+        (a.bottom - b.bottom).abs() <= e;
   }
 
   Offset _pulseCenter(RRect rect, Alignment alignment) {
@@ -519,16 +610,43 @@ class _SpotlightTourState extends State<SpotlightTour>
     return RRect.lerp(from, to, t);
   }
 
-  /// The outline actually cut out of the scrim: the animated bounding shape
-  /// while a morph is in flight, otherwise the precise contour when the step
-  /// has one.
+  /// The outline actually cut out of the scrim and stroked by the border:
+  /// one shape at every moment, so the border always hugs the bright area.
+  ///
+  /// While a morph is in flight the two steps' line rects are lerped one by
+  /// one (extra lines split out of / merge into the nearest existing line),
+  /// so a text-lines contour keeps its stepped, text-hugging shape through
+  /// the whole glide. Outside a morph the step's precise contour is used.
   Path? get _animatedPath {
-    final rect = _animatedRect;
-    if (rect == null) return null;
-    final morphing = _morphFrom != null || _morphTo != null;
-    final precise = _target?.path;
-    if (!morphing && precise != null) return precise;
-    return Path()..addRRect(rect);
+    final from = _morphFromLines;
+    final to = _morphToLines;
+    if (from == null && to == null) {
+      final precise = _target?.path;
+      if (precise != null) return precise;
+      final b = _target?.bounds;
+      return b == null ? null : (Path()..addRRect(b));
+    }
+    if (from == null || to == null) {
+      // Appearing / disappearing spotlight: no lerp, just show the target.
+      final rect = _animatedRect;
+      return rect == null ? null : (Path()..addRRect(rect));
+    }
+    final t = Curves.easeInOutCubic.transform(_morphCtrl.value);
+    final count = math.max(from.length, to.length);
+    Path? union;
+    for (var i = 0; i < count; i++) {
+      final f = from[math.min(i, from.length - 1)];
+      final d = to[math.min(i, to.length - 1)];
+      final r = RRect.lerp(f, d, t);
+      if (r == null) continue;
+      final linePath = Path()..addRRect(r);
+      // Same reason as in _resolveTextTarget: overlapping line rects must
+      // merge, otherwise the even-odd scrim cutout cancels the overlap.
+      union = union == null
+          ? linePath
+          : Path.combine(PathOperation.union, union, linePath);
+    }
+    return union;
   }
 
   Widget _buildOverlay(BuildContext overlayContext) {
@@ -546,13 +664,6 @@ class _SpotlightTourState extends State<SpotlightTour>
       builder: (context, _) {
         final rect = _animatedRect;
         final path = _animatedPath;
-        final morphing = _morphFrom != null || _morphTo != null;
-        // While gliding towards a text-lines target, cross-fade the border
-        // to the precise contour over the last 40% of the morph.
-        final contour = morphing ? _target?.path : null;
-        final contourBlend = contour == null
-            ? 0.0
-            : ((_morphCtrl.value - 0.6) / 0.4).clamp(0.0, 1.0);
         if (_cardSizeDirty) {
           _cardSizeDirty = false;
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -617,32 +728,43 @@ class _SpotlightTourState extends State<SpotlightTour>
                           scrimOpacity: _scrimCtrl.value,
                           tapThroughTarget: !_transitioning &&
                               step.interaction != TourTargetInteraction.none,
-                          contourPath: contour,
-                          contourBlend: contourBlend,
                         ),
                       ),
                     ),
                   ),
-                  // Pulse orb on the target. Isolated in its own
+                  // Indicator on the target: the pulsing tap orb, or a
+                  // swipe-demonstrating orb gliding across the target
+                  // (TourStep.indicator). Isolated in its own
                   // RepaintBoundary + AnimatedBuilder: while it runs, only
                   // this small layer repaints, not the full-screen scrim.
+                  // Always IgnorePointer: the real gesture passes through
+                  // to the app on interactive steps.
                   if (rect != null && !_pulsesDone)
                     Builder(builder: (context) {
                       final side = (rect.outerRect.shortestSide * 0.9)
                           .clamp(36.0, 110.0);
                       final center = _pulseCenter(rect, step.pulseAlignment);
+                      final swipe = step.indicator != TourIndicator.pulse;
                       return Positioned(
-                        left: center.dx - side / 2,
+                        left: swipe
+                            ? rect.outerRect.left
+                            : center.dx - side / 2,
                         top: center.dy - side / 2,
-                        width: side,
+                        width: swipe ? rect.outerRect.width : side,
                         height: side,
                         child: IgnorePointer(
                           child: RepaintBoundary(
                             child: AnimatedBuilder(
                               animation: _pulseCtrl,
                               builder: (context, _) => CustomPaint(
-                                painter:
-                                    PulsePainter(progress: _pulseCtrl.value),
+                                painter: swipe
+                                    ? SwipePainter(
+                                        progress: _pulseCtrl.value,
+                                        leftToRight: step.indicator ==
+                                            TourIndicator.swipeLeftToRight,
+                                      )
+                                    : PulsePainter(
+                                        progress: _pulseCtrl.value),
                               ),
                             ),
                           ),

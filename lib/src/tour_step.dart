@@ -40,6 +40,23 @@ enum TourTargetInteraction {
   swipe,
 }
 
+/// What the small animated indicator on top of the highlighted target
+/// demonstrates. The indicator never blocks gestures: on interactive steps
+/// (see [TourStep.interaction]) the real gesture still passes through to the
+/// app underneath.
+enum TourIndicator {
+  /// A white pulsing orb suggesting a tap (default).
+  pulse,
+
+  /// A white orb gliding from the target's left edge to its right edge with
+  /// a short fading trail, demonstrating a left-to-right swipe — e.g.
+  /// turning to the next page of a mushaf.
+  swipeLeftToRight,
+
+  /// Same demonstration, gliding from right to left.
+  swipeRightToLeft,
+}
+
 /// A single step of the tour.
 ///
 /// A step with a `null` [targetKey] is a "free" step: no spotlight is shown
@@ -57,6 +74,7 @@ class TourStep {
     this.textRange,
     this.pulseAlignment = Alignment.center,
     this.showPulse = true,
+    this.indicator = TourIndicator.pulse,
     this.onEnter,
     this.onNext,
     this.interaction = TourTargetInteraction.none,
@@ -103,8 +121,15 @@ class TourStep {
   /// Where the white pulse orb sits inside the spotlight.
   final Alignment pulseAlignment;
 
-  /// Whether the pulse animation plays on this step.
+  /// Whether the indicator animation plays on this step.
   final bool showPulse;
+
+  /// What the indicator on this step demonstrates. Defaults to
+  /// [TourIndicator.pulse]; use [TourIndicator.swipeLeftToRight] or
+  /// [TourIndicator.swipeRightToLeft] on steps that teach a page swipe.
+  /// Honours [showPulse], `SpotlightTourTheme.pulseRepeatCount` and the
+  /// system's reduced-motion setting exactly like the pulse.
+  final TourIndicator indicator;
 
   /// Runs when this step becomes active, *before* its target is resolved.
   ///

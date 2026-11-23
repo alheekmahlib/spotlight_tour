@@ -20,8 +20,8 @@ class _SpotTarget {
   final RRect bounds;
 
   /// Precise cutout outline, or `null` to cut out [bounds]. Set for
-  /// [TourTargetShape.textLines] steps: a union of one rounded rect per
-  /// rendered text line, forming the stepped contour around the selection.
+  /// [TourTargetShape.textLines] steps: one continuous stepped contour
+  /// around the per-line rects (see [steppedContourPath]).
   final Path? path;
 
   /// The outline as a list of rounded rects, top to bottom: one entry per
@@ -480,18 +480,28 @@ class _SpotlightTourState extends State<SpotlightTour>
           ancestor: overlayBox);
       final rect = Rect.fromLTWH(
           topLeft.dx, topLeft.dy, box.right - box.left, box.bottom - box.top);
-      if (lineRects.isNotEmpty &&
-          (rect.top - lineRects.last.top).abs() <= 2) {
-        lineRects[lineRects.length - 1] =
-            lineRects.last.expandToInclude(rect);
-      } else {
-        lineRects.add(rect);
+      if (lineRects.isNotEmpty) {
+        final last = lineRects.last;
+        final overlap =
+            math.min(rect.bottom, last.bottom) - math.max(rect.top, last.top);
+        // Same visual line: glyph-run boxes on one line can have different
+        // vertical extents (mixed font sizes, Arabic diacritics, embedded
+        // numbers), but they overlap by most of the shorter box. Boxes on
+        // different lines never overlap that much. A fixed top tolerance
+        // would split such a line into two stacked strips, which the
+        // outline then traces as a spurious rectangular bump.
+        if (overlap > 0.5 * math.min(rect.height, last.height)) {
+          lineRects[lineRects.length - 1] = last.expandToInclude(rect);
+          continue;
+        }
       }
+      lineRects.add(rect);
     }
 
     // Make consecutive lines vertically contiguous (selection boxes are
-    // tight to the glyphs, so line leading would otherwise split the union
-    // into separate shapes), then pad each line and clip to the overlay.
+    // tight to the glyphs, so line leading would otherwise split the
+    // outline into separate shapes), then pad each line and clip to the
+    // overlay.
     final padded = <Rect>[];
     for (var i = 0; i < lineRects.length; i++) {
       var r = lineRects[i];
@@ -504,7 +514,6 @@ class _SpotlightTourState extends State<SpotlightTour>
       }
       padded.add(r);
     }
-    Path? union;
     Rect? bounding;
     final lineRRects = <RRect>[];
     for (final r in padded) {
@@ -512,20 +521,12 @@ class _SpotlightTourState extends State<SpotlightTour>
           step.targetPadding.inflateRect(r).intersect(overlayBounds);
       if (inflated.isEmpty) continue;
       bounding = bounding == null ? inflated : bounding.expandToInclude(inflated);
-      final lineRRect = RRect.fromRectAndRadius(inflated, radius);
-      lineRRects.add(lineRRect);
-      final linePath = Path()..addRRect(lineRRect);
-      // Boolean union (not addPath): overlapping line rects must merge into
-      // a single outline, otherwise the even-odd scrim cutout would cancel
-      // where two subpaths overlap.
-      union = union == null
-          ? linePath
-          : Path.combine(PathOperation.union, union, linePath);
+      lineRRects.add(RRect.fromRectAndRadius(inflated, radius));
     }
-    if (bounding == null || union == null) return null;
+    if (bounding == null || lineRRects.isEmpty) return null;
     return _SpotTarget(
         bounds: RRect.fromRectAndRadius(bounding, radius),
-        path: union,
+        path: steppedContourPath(lineRRects),
         lines: lineRRects);
   }
 
@@ -633,20 +634,15 @@ class _SpotlightTourState extends State<SpotlightTour>
     }
     final t = Curves.easeInOutCubic.transform(_morphCtrl.value);
     final count = math.max(from.length, to.length);
-    Path? union;
+    final lines = <RRect>[];
     for (var i = 0; i < count; i++) {
       final f = from[math.min(i, from.length - 1)];
       final d = to[math.min(i, to.length - 1)];
       final r = RRect.lerp(f, d, t);
-      if (r == null) continue;
-      final linePath = Path()..addRRect(r);
-      // Same reason as in _resolveTextTarget: overlapping line rects must
-      // merge, otherwise the even-odd scrim cutout cancels the overlap.
-      union = union == null
-          ? linePath
-          : Path.combine(PathOperation.union, union, linePath);
+      if (r != null) lines.add(r);
     }
-    return union;
+    if (lines.isEmpty) return null;
+    return steppedContourPath(lines);
   }
 
   Widget _buildOverlay(BuildContext overlayContext) {

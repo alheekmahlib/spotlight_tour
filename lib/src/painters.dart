@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/widgets.dart';
@@ -85,6 +86,91 @@ class SpotlightPainter extends CustomPainter {
       oldDelegate.glowSigma != glowSigma ||
       oldDelegate.scrimOpacity != scrimOpacity ||
       oldDelegate.tapThroughTarget != tapThroughTarget;
+}
+
+/// Traces one continuous stepped outline around a stack of per-line
+/// rounded rects (top to bottom, vertically touching or overlapping).
+///
+/// A boolean union of fully-rounded line rects pinches at the join
+/// between lines of different widths: each line's own corner radius cuts
+/// into the neck, and when the vertical overlap is smaller than the
+/// corner diameter the outline visibly thins or breaks at the step (the
+/// "disconnected frame between two lines" report). This walks the left
+/// and right edge profiles instead, so the result is a single closed
+/// contour by construction: rounded corners only at the four outermost
+/// corners, sharp steps where a line's edge moves in or out, and no
+/// pinch at any width difference or overlap.
+Path steppedContourPath(List<RRect> lines) {
+  assert(lines.isNotEmpty);
+  if (lines.length == 1) return Path()..addRRect(lines.first);
+
+  double cornerRadius(RRect r) =>
+      math.min(r.tlRadius.x, math.min(r.width, r.height) / 2);
+  final firstR = cornerRadius(lines.first);
+  final lastR = cornerRadius(lines.last);
+  // Steps smaller than this are antialiasing noise, not real width
+  // changes; skipping them avoids zero-length jag segments.
+  const eps = 0.5;
+
+  final path = Path()
+    ..moveTo(lines.first.left + firstR, lines.first.top);
+  // Top edge, top-right corner, then the right profile downwards.
+  path.lineTo(lines.first.right - firstR, lines.first.top);
+  if (firstR > 0) {
+    path.arcToPoint(Offset(lines.first.right, lines.first.top + firstR),
+        radius: Radius.circular(firstR));
+  }
+  for (var i = 0; i < lines.length - 1; i++) {
+    final cur = lines[i];
+    final next = lines[i + 1];
+    if (next.right > cur.right + eps) {
+      // The next line reaches further right: step at its top, the
+      // highest y where it owns the edge.
+      path
+        ..lineTo(cur.right, next.top)
+        ..lineTo(next.right, next.top);
+    } else if (next.right < cur.right - eps) {
+      // The next line ends earlier: step at this line's bottom, the
+      // lowest y where this line owns the edge.
+      path
+        ..lineTo(cur.right, cur.bottom)
+        ..lineTo(next.right, cur.bottom);
+    }
+  }
+  path.lineTo(lines.last.right, lines.last.bottom - lastR);
+  if (lastR > 0) {
+    path.arcToPoint(Offset(lines.last.right - lastR, lines.last.bottom),
+        radius: Radius.circular(lastR));
+  }
+  // Bottom edge and bottom-left corner.
+  path.lineTo(lines.last.left + lastR, lines.last.bottom);
+  if (lastR > 0) {
+    path.arcToPoint(Offset(lines.last.left, lines.last.bottom - lastR),
+        radius: Radius.circular(lastR));
+  }
+  // Left profile, upwards (mirror of the right profile).
+  for (var i = lines.length - 1; i > 0; i--) {
+    final cur = lines[i];
+    final above = lines[i - 1];
+    if (above.left < cur.left - eps) {
+      // The line above reaches further left: step at its bottom.
+      path
+        ..lineTo(cur.left, above.bottom)
+        ..lineTo(above.left, above.bottom);
+    } else if (above.left > cur.left + eps) {
+      // The line above ends earlier: step at this line's top.
+      path
+        ..lineTo(cur.left, cur.top)
+        ..lineTo(above.left, cur.top);
+    }
+  }
+  path.lineTo(lines.first.left, lines.first.top + firstR);
+  if (firstR > 0) {
+    path.arcToPoint(Offset(lines.first.left + firstR, lines.first.top),
+        radius: Radius.circular(firstR));
+  }
+  path.close();
+  return path;
 }
 
 /// The white "tap" orb that grows and fades on top of the highlighted target.

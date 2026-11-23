@@ -434,4 +434,86 @@ void main() {
     await expectLater(
         find.byType(MaterialApp), matchesGoldenFile('goldens/tour_done.png'));
   });
+
+  testWidgets('contour joins golden: varied widths, heights, mixed direction',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // Worst case for line joins: a partial first line, a taller middle
+    // line (larger span), an embedded LTR number run, and a short last
+    // line anchored right.
+    const fullText =
+        'سابق غير محدد وَاللَّهُ لَا إِلَٰهَ هُوَ لَيَجْمَعَنَّكُمْ إِلَىٰ يَوْمِ '
+        'الْقِيَامَةِ لَا رَيْبَ فِيهِ رقم ٨٧٤٢ وسط السطر وَمَنْ أَصْدَقُ '
+        'مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾ لاحق غير محدد';
+    final textKey = GlobalKey();
+    const range = TextRange(start: 14, end: fullText.length - 14);
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: textKey,
+        shape: TourTargetShape.textLines,
+        textRange: range,
+        title: 'وصلات الإطار',
+        description: 'سطور مختلفة العرض والارتفاع مع أرقام',
+        showPulse: false,
+      ),
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        scaffoldBackgroundColor: const Color(0xFF100E0C),
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'NotoNaskh'),
+      ),
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: SpotlightTour(
+          controller: controller,
+          child: Scaffold(
+            backgroundColor: const Color(0xFF161411),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Text.rich(
+                key: textKey,
+                textDirection: TextDirection.rtl,
+                TextSpan(
+                  style: const TextStyle(
+                      fontFamily: 'Amiri',
+                      fontSize: 20,
+                      height: 1.9,
+                      color: Color(0xFFE8E2D5)),
+                  children: [
+                    TextSpan(text: fullText.substring(0, 60)),
+                    TextSpan(
+                        text: fullText.substring(60, 74),
+                        style: const TextStyle(fontSize: 30)),
+                    TextSpan(text: fullText.substring(74)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        ),
+      )));
+    controller.start();
+    await tester.pump();
+    for (var i = 0; i < 14; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    final painter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    // The whole outline is a single closed contour.
+    expect(painter.targetPath!.computeMetrics().length, 1);
+
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_contour_joins.png'));
+  });
 }

@@ -31,3 +31,6 @@ build/
 
 # Package lock (libraries should not commit pubspec.lock)
 pubspec.lock
+
+# Golden test failure artifacts
+test/failures/

@@ -77,6 +77,7 @@ class TourStep {
     this.indicator = TourIndicator.pulse,
     this.onEnter,
     this.onNext,
+    this.onExit,
     this.interaction = TourTargetInteraction.none,
     this.requireInteraction = false,
     this.interactionHint,
@@ -140,6 +141,14 @@ class TourStep {
   /// bottom sheet) are found once they are laid out.
   ///
   /// Runs on forward and backward entry, so keep it idempotent.
+  ///
+  /// This is also what restores the step's UI when the user comes BACK to
+  /// the step with the Previous button: pair it with [onExit] (open the
+  /// sheet here, close it there) and returning to the step re-establishes
+  /// exactly what it needs. Consecutive steps that point into the same UI
+  /// (two steps inside one bottom sheet) should each open it here — an
+  /// idempotent opener makes the second call a no-op — and only the last
+  /// of them closes it in [onExit].
   final FutureOr<void> Function()? onEnter;
 
   /// Runs when the user confirms this step (the Next/Start/Done button) and
@@ -154,6 +163,16 @@ class TourStep {
   /// Only runs on forward moves (including the final Done confirmation), not
   /// when going back or when the tour is skipped.
   final FutureOr<void> Function()? onNext;
+
+  /// Runs when the tour leaves this step — Next, Previous, skip or the
+  /// final Done — and is awaited before the transition continues.
+  ///
+  /// Pair it with [onEnter] for UI a step needs while it is active:
+  /// [onEnter] establishes it (on forward and backward entry), [onExit]
+  /// tears it down. This is also the right place to cancel a still-running
+  /// demonstration started in [onEnter] (see `PageSwipeDemo.cancel`), so a
+  /// skipped or interrupted tour never leaves the app mid-animation.
+  final FutureOr<void> Function()? onExit;
 
   /// Which gestures pass through the dimmed backdrop to the target widget
   /// underneath. See [TourTargetInteraction]. Default: [TourTargetInteraction.none]

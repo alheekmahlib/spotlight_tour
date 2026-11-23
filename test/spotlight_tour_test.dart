@@ -881,4 +881,369 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     expect(controller.status, TourStatus.running);
   });
+
+  testWidgets('backward navigation tears down with onExit and re-runs onEnter',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final events = <String>[];
+    TourStep step(int i) => TourStep(
+          targetKey: keys[i],
+          title: 'خطوة $i',
+          description: 'وصف $i',
+          onEnter: () => events.add('enter$i'),
+          onNext: () => events.add('next$i'),
+          onExit: () => events.add('exit$i'),
+        );
+    final controller =
+        SpotlightTourController(steps: [step(0), step(1), step(2)]);
+
+    await tester.pumpWidget(buildApp(controller, keys: keys));
+
+    Future<void> settle() async {
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    controller.start();
+    await tester.pump();
+    await settle();
+    expect(events, ['enter0']);
+
+    // Forward: the leaving step's confirm action runs, then its teardown,
+    // then the entering step's setup.
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle();
+    expect(events, ['enter0', 'next0', 'exit0', 'enter1']);
+
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle();
+    expect(events,
+        ['enter0', 'next0', 'exit0', 'enter1', 'next1', 'exit1', 'enter2']);
+
+    // Backward: NO onNext (the confirm action is forward-only), but the
+    // leaving step's onExit tears its UI down and the returned-to step's
+    // onEnter re-establishes what it needs.
+    await tester.tap(find.text('السابق'));
+    await tester.pump();
+    await settle();
+    expect(events,
+        ['enter0', 'next0', 'exit0', 'enter1', 'next1', 'exit1', 'enter2',
+         'exit2', 'enter1']);
+
+    await tester.tap(find.text('السابق'));
+    await tester.pump();
+    await settle();
+    expect(
+        events,
+        ['enter0', 'next0', 'exit0', 'enter1', 'next1', 'exit1', 'enter2',
+         'exit2', 'enter1', 'exit1', 'enter0']);
+  });
+
+  testWidgets('skip and done run the active step onExit teardown',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final events = <String>[];
+    TourStep step(int i) => TourStep(
+          targetKey: keys[i],
+          title: 'خطوة $i',
+          description: 'وصف $i',
+          onEnter: () => events.add('enter$i'),
+          onNext: () => events.add('next$i'),
+          onExit: () => events.add('exit$i'),
+        );
+    final controller = SpotlightTourController(steps: [step(0), step(1)]);
+
+    await tester.pumpWidget(buildApp(controller, keys: keys));
+
+    Future<void> settle() async {
+      for (var i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    // Skip: the open step must still be torn down.
+    controller.start();
+    await tester.pump();
+    await settle();
+    await tester.tap(find.text('تخطي الجولة'));
+    await tester.pump();
+    await settle();
+    expect(events, ['enter0', 'exit0']);
+    expect(controller.status, TourStatus.idle);
+
+    // Done on the last step: confirm action AND teardown both run.
+    events.clear();
+    controller.start();
+    await tester.pump();
+    await settle();
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle();
+    await tester.tap(find.text('تم'));
+    await tester.pump();
+    await settle();
+    expect(events, ['enter0', 'next0', 'exit0', 'enter1', 'next1', 'exit1']);
+    expect(controller.status, TourStatus.idle);
+  });
+
+  testWidgets('Previous reopens the modal sheet the returned step needs',
+      (tester) async {
+    final key0 = GlobalKey();
+    final sheetItemKey = GlobalKey();
+    final navKey = GlobalKey<NavigatorState>();
+    var sheetOpen = false;
+
+    // The same function the app's real gesture would call — idempotent.
+    Future<void> openSheet() async {
+      if (sheetOpen) return;
+      sheetOpen = true;
+      await showModalBottomSheet<void>(
+        context: navKey.currentContext!,
+        builder: (_) => Directionality(
+          textDirection: TextDirection.rtl,
+          child: SizedBox(
+            height: 220,
+            child: Center(
+              child: Container(
+                key: sheetItemKey,
+                padding: const EdgeInsets.all(12),
+                child: const Text('داخل النافذة'),
+              ),
+            ),
+          ),
+        ),
+      );
+      sheetOpen = false;
+    }
+
+    void closeSheet() {
+      if (!sheetOpen) return;
+      Navigator.of(navKey.currentContext!).pop();
+    }
+
+    final controller = SpotlightTourController(steps: [
+      TourStep(
+        targetKey: key0,
+        title: 'افتح الخيارات',
+        description: 'التالي يفتح النافذة',
+        onNext: () => unawaited(openSheet()),
+      ),
+      TourStep(
+        targetKey: sheetItemKey,
+        title: 'عنصر النافذة',
+        description: 'مُبرز داخل النافذة',
+        // Runs on forward AND backward entry: returning to this step
+        // reopens the sheet. Idempotent, so the forward path (where the
+        // previous step's onNext already opened it) does not double-push.
+        onEnter: () => unawaited(openSheet()),
+        onNext: closeSheet,
+        onExit: closeSheet,
+      ),
+      TourStep(targetKey: key0, title: 'خطوة أخيرة', description: 'بعد النافذة'),
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      navigatorKey: navKey,
+      home: Directionality(
+        textDirection: TextDirection.rtl,
+        child: SpotlightTour(
+          controller: controller,
+          child: Scaffold(
+            body: Container(key: key0, height: 60, color: Colors.blue),
+          ),
+        ),
+      ),
+    ));
+
+    Future<void> settle() async {
+      for (var i = 0; i < 14; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    controller.start();
+    await tester.pump();
+    await settle();
+
+    // Forward: Next opens the sheet and the tour highlights inside it.
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle();
+    expect(find.text('داخل النافذة'), findsOneWidget);
+    expect(find.text('عنصر النافذة'), findsOneWidget);
+
+    // Forward again: the sheet step's onNext closed it.
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle();
+    expect(find.text('داخل النافذة'), findsNothing);
+    expect(find.text('خطوة أخيرة'), findsOneWidget);
+
+    // REGRESSION — the reported bug: Previous must re-run the step's setup,
+    // reopening the sheet, not merely show its description text.
+    await tester.tap(find.text('السابق'));
+    await tester.pump();
+    await settle();
+    expect(find.text('داخل النافذة'), findsOneWidget,
+        reason: 'returning to the sheet step must reopen the sheet');
+    expect(find.text('عنصر النافذة'), findsOneWidget);
+    final painter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    final itemBox =
+        sheetItemKey.currentContext!.findRenderObject()! as RenderBox;
+    final itemCenter =
+        itemBox.localToGlobal(itemBox.size.center(Offset.zero));
+    expect(painter.targetPath, isNotNull);
+    expect(painter.targetPath!.contains(itemCenter), isTrue);
+
+    // Backward once more: the sheet step's onExit closes it, so the first
+    // step shows the page as it was.
+    await tester.tap(find.text('السابق'));
+    await tester.pump();
+    await settle();
+    expect(find.text('داخل النافذة'), findsNothing);
+    expect(find.text('افتح الخيارات'), findsOneWidget);
+  });
+
+  group('PageSwipeDemo', () {
+    Widget demoApp(PageController pc,
+            {TextDirection direction = TextDirection.rtl, int pages = 5}) =>
+        MaterialApp(
+          home: Directionality(
+            textDirection: direction,
+            child: Scaffold(
+              body: PageView(
+                controller: pc,
+                children: [
+                  for (var i = 0; i < pages; i++)
+                    Center(child: Text('صفحة $i')),
+                ],
+              ),
+            ),
+          ),
+        );
+
+    testWidgets('returns to the exact original page, not page zero',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      expect(pc.page!.round(), 2);
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+
+      var maxMoved = 0.0;
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        final moved = pc.position.pixels - start;
+        if (moved > maxMoved) maxMoved = moved;
+        // RTL, left-to-right swipe: content moves right => offset grows.
+        expect(pc.page!.round(), 2, reason: "a demonstration must never flip the page");
+      }
+      await done;
+      expect(maxMoved, greaterThan(100),
+          reason: 'the page must visibly slide rightward (RTL: offset grows)');
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(pc.page!.round(), 2);
+      expect(demo.isRunning, isFalse);
+    });
+
+    testWidgets('LTR: a left-to-right demo slides the content rightward',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc, direction: TextDirection.ltr));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+
+      var minMoved = 0.0;
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        final moved = pc.position.pixels - start;
+        if (moved < minMoved) minMoved = moved;
+      }
+      await done;
+      // LTR: content moving right means the offset shrinks (previous page
+      // peeks in from the left) — without ever settling on it.
+      expect(minMoved, lessThan(-100));
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(pc.page!.round(), 2);
+    });
+
+    testWidgets('cancel restores the original offset immediately',
+        (tester) async {
+      final pc = PageController(initialPage: 2);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      final done = demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(pc.position.pixels - start, greaterThan(50));
+
+      demo.cancel();
+      expect(demo.isRunning, isFalse);
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      await done; // the in-flight run completes early, without re-restoring
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(pc.page!.round(), 2);
+    });
+
+    testWidgets('at the scroll edge it never shows the opposite gesture',
+        (tester) async {
+      final pc = PageController(initialPage: 4);
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      final start = pc.position.pixels;
+      expect(start, pc.position.maxScrollExtent);
+      // RTL last page: a left-to-right demonstration has no room. It must
+      // be a safe no-op — never a right-to-left slide in disguise.
+      await demo.demonstrate(TourSwipeDirection.leftToRight);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(pc.position.pixels, moreOrLessEquals(start, epsilon: 0.001));
+      expect(pc.page!.round(), 4);
+      expect(demo.isRunning, isFalse);
+    });
+
+    testWidgets('single-page view: demonstration is a no-op', (tester) async {
+      final pc = PageController();
+      addTearDown(pc.dispose);
+      await tester.pumpWidget(demoApp(pc, pages: 1));
+      await tester.pumpAndSettle();
+      final demo = PageSwipeDemo(pageController: pc, vsync: const TestVSync());
+      addTearDown(demo.dispose);
+
+      await demo.demonstrate(TourSwipeDirection.leftToRight);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pc.position.pixels, moreOrLessEquals(0, epsilon: 0.001));
+      expect(demo.isRunning, isFalse);
+    });
+  });
 }

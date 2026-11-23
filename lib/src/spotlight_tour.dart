@@ -248,11 +248,23 @@ class _SpotlightTourState extends State<SpotlightTour>
   Future<void> _closeFlow() async {
     _closing = true;
     final c = widget.controller;
-    if (c.finishedByConfirm && _displayedIndex < c.steps.length) {
+    if (_displayedIndex < c.steps.length) {
+      final step = c.steps[_displayedIndex];
+      if (c.finishedByConfirm) {
+        try {
+          await step.onNext?.call();
+        } catch (_) {
+          // A failing cleanup action must not trap the tour on screen.
+        }
+        if (!mounted || c.status != TourStatus.closing) return;
+      }
+      // The active step's teardown runs on BOTH endings — Done and skip —
+      // so UI the step opened (a sheet, a running demo) is never left
+      // behind when the tour goes away.
       try {
-        await c.steps[_displayedIndex].onNext?.call();
+        await step.onExit?.call();
       } catch (_) {
-        // A failing cleanup action must not trap the tour on screen.
+        // Same policy as above.
       }
       if (!mounted || c.status != TourStatus.closing) return;
       _raiseEntry();
@@ -284,7 +296,8 @@ class _SpotlightTourState extends State<SpotlightTour>
   /// 2. forward moves: run the leaving step's [TourStep.onNext] and wait for
   ///    it — this is what makes the tour *do* things (open the app's sheet,
   ///    turn the page, ...)
-  /// 3. card slides out; the entering step's [TourStep.onEnter] runs and is
+  /// 3. both directions: run the leaving step's [TourStep.onExit], then the
+  ///    card slides out; the entering step's [TourStep.onEnter] runs and is
   ///    awaited, so UI it prepares exists before measurement
   /// 4. the overlay re-raises itself above any route (sheet/dialog) those
   ///    actions pushed, then the new target is resolved, retrying every
@@ -311,11 +324,22 @@ class _SpotlightTourState extends State<SpotlightTour>
           c.status != TourStatus.running ||
           c.index != index;
 
-      if (forward && !initial) {
+      if (!initial) {
+        if (forward) {
+          try {
+            await c.steps[_displayedIndex].onNext?.call();
+          } catch (_) {
+            // A failing action must not wedge the tour: continue without it.
+          }
+          if (aborted()) return;
+        }
+        // The leaving step's teardown runs in BOTH directions: returning to
+        // a step must restore exactly the UI that step needs, which only
+        // works if the step being left lets go of its own first.
         try {
-          await c.steps[_displayedIndex].onNext?.call();
+          await c.steps[_displayedIndex].onExit?.call();
         } catch (_) {
-          // A failing action must not wedge the tour: continue without it.
+          // Same policy as onNext above.
         }
         if (aborted()) return;
         _raiseEntry();

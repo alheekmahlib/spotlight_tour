@@ -11,18 +11,27 @@ import 'package:spotlight_tour/src/painters.dart';
 Future<void> loadFonts() async {
   Future<ByteData> read(String path) async =>
       ByteData.view(File(path).readAsBytesSync().buffer);
+  // The material icons font lives in the Flutter SDK cache. The running
+  // binary is either dart (<sdk>/bin/cache/dart-sdk/bin/dart) or
+  // flutter_tester (<sdk>/bin/cache/artifacts/engine/.../flutter_tester):
+  // walk up until we find the cache directory holding the font.
+  var dir = File(Platform.resolvedExecutable).absolute.parent;
+  var icons =
+      '${dir.path}/artifacts/material_fonts/MaterialIcons-Regular.otf';
+  for (var i = 0; i < 8 && !File(icons).existsSync(); i++) {
+    dir = dir.parent;
+    icons = '${dir.path}/artifacts/material_fonts/MaterialIcons-Regular.otf';
+  }
   final naskh = FontLoader('NotoNaskh')
     ..addFont(read('test/assets/NotoNaskhArabic-Regular.ttf'))
     ..addFont(read('test/assets/NotoNaskhArabic-SemiBold.ttf'))
     ..addFont(read('test/assets/NotoNaskhArabic-Bold.ttf'));
   final amiri = FontLoader('Amiri')
     ..addFont(read('test/assets/Amiri-Regular.ttf'));
-  final icons = FontLoader('MaterialIcons')
-    ..addFont(read(
-        '/tmp/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf'));
+  final materialIcons = FontLoader('MaterialIcons')..addFont(read(icons));
   await naskh.load();
   await amiri.load();
-  await icons.load();
+  await materialIcons.load();
 }
 
 /// نص الصفحة الأولى.
@@ -30,17 +39,20 @@ const String pageOneText =
     'وَإِذَا حُيِّيتُم بِتَحِيَّةٍ فَحَيُّوا بِأَحْسَنَ مِنْهَا أَوْ رُدُّوهَا ۗ '
     'إِنَّ اللَّهَ كَانَ عَلَىٰ كُلِّ شَيْءٍ حَسِيبًا ﴿٨٦﴾ '
     'يَا أَيُّهَا الَّذِينَ آمَنُوا لَا تَتَّبِعُوا خُطُوَاتِ الشَّيْطَانِ ۚ '
-    'وَمَن يَتَّبِعْ خُطُوَاتِهِ فَإِنَّهُ يَأْمُرُ بِالْفَحْشَاءِ وَالْمُنكَرِ ﴿٢١﴾';
+    'وَمَن يَتَّبِعُ خُطُوَاتِهِ فَإِنَّهُ يَأْمُرُ بِالْفَحْشَاءِ وَالْمُنكَرِ ﴿٢١﴾';
 
-/// نص الصفحة الثانية المتدفق: آيتان متتابعتان في سياق واحد.
+/// نص الصفحة الثانية.
 const String pageTwoText =
     'وَاللَّهُ لَا إِلَٰهَ إِلَّا هُوَ ۚ لَيَجْمَعَنَّكُمْ إِلَىٰ يَوْمِ الْقِيَامَةِ لَا رَيْبَ فِيهِ ۗ وَمَنْ أَصْدَقُ مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾ '
     'فَمَا لَكُمْ فِي الْمُنَافِقِينَ فِئَتَيْنِ وَاللَّهُ أَرْكَسَهُم بِمَا كَسَبُوا ۚ أَتُرِيدُونَ أَن تَهْدُوا مَنْ أَضَلَّ اللَّهُ ﴿٨٨﴾';
 
-TextRange firstVerseOfPageTwo() {
-  const marker = '﴿٨٧﴾';
-  final end = pageTwoText.indexOf(marker) + marker.length;
-  return TextRange(start: 0, end: end);
+/// نطاق الآية الثانية من الصفحة الأولى (تبدأ منتصف سطر وتنتهي منتصف سطر).
+TextRange secondVerseOfPageOne() {
+  const startMarker = 'يَا أَيُّهَا';
+  const endMarker = '﴿٢١﴾';
+  final start = pageOneText.indexOf(startMarker);
+  final end = pageOneText.indexOf(endMarker) + endMarker.length;
+  return TextRange(start: start, end: end);
 }
 
 class DemoKeys {
@@ -51,24 +63,39 @@ class DemoKeys {
   final nav = GlobalKey();
 }
 
-/// شاشة العرض نفسها المستخدمة في مثال الحزمة: صفحتان بقلب حقيقي، ونافذة
-/// خيارات آية حقيقية تفتحها الجولة ثم تشرح عناصرها.
+/// شاشة العرض نفسها المستخدمة في مثال الحزمة: عرض تلقائي لقلب الصفحة يعود
+/// بها إلى موضعها، ونافذة خيارات آية حقيقية تفتحها الجولة ثم تشرح عناصرها،
+/// وتُعيد فتحها عند العودة بـ«السابق».
 class GoldenDemoScreen extends StatefulWidget {
-  const GoldenDemoScreen({super.key, required this.keys, required this.tour});
+  const GoldenDemoScreen(
+      {super.key,
+      required this.keys,
+      required this.tour,
+      required this.pageController});
 
   final DemoKeys keys;
   final SpotlightTourController tour;
-
-  static const swipeStepIndex = 1;
+  final PageController pageController;
 
   @override
   State<GoldenDemoScreen> createState() => _GoldenDemoScreenState();
 }
 
-class _GoldenDemoScreenState extends State<GoldenDemoScreen> {
+class _GoldenDemoScreenState extends State<GoldenDemoScreen>
+    with TickerProviderStateMixin {
+  late final PageSwipeDemo _swipeDemo = PageSwipeDemo(
+    pageController: widget.pageController,
+    vsync: this,
+  );
   bool _verseOptionsOpen = false;
 
   DemoKeys get k => widget.keys;
+
+  @override
+  void dispose() {
+    _swipeDemo.dispose();
+    super.dispose();
+  }
 
   Future<void> _openVerseOptions() async {
     if (_verseOptionsOpen) return;
@@ -121,27 +148,31 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen> {
     Navigator.of(context).pop();
   }
 
+  void _demonstrateSwipe() {
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return;
+    unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight));
+  }
+
   List<TourStep> _steps() => [
         const TourStep(
           title: 'جولة تفاعلية',
           description:
-              'هذه الجولة لا تشرح فقط، بل تنفّذ معك: ستقلب الصفحة بنفسك، وستفتح الجولة خيارات الآية الحقيقية لتشرحها لك.',
+              'هذه الجولة لا تشرح فقط، بل تنفّذ معك: سترى كيف تُقلب الصفحة، وستفتح الجولة خيارات الآية الحقيقية لتشرحها لك.',
         ),
         TourStep(
           targetKey: k.pageView,
           title: 'قلّب الصفحات',
           description:
-              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً. جرّب الآن: اسحب الصفحة لتنتقل الجولة معك.',
+              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تتحرك الصفحة الآن أمامك ثم تعود إلى مكانها.',
           icon: Icons.swipe_outlined,
           indicator: TourIndicator.swipeLeftToRight,
-          interaction: TourTargetInteraction.swipe,
-          requireInteraction: true,
-          interactionHint: 'اسحب الصفحة للمتابعة',
+          onEnter: _demonstrateSwipe,
+          onExit: _swipeDemo.cancel,
         ),
         TourStep(
           targetKey: k.pageText,
           shape: TourTargetShape.textLines,
-          textRange: firstVerseOfPageTwo(),
+          textRange: secondVerseOfPageOne(),
           title: 'خيارات الآية',
           description:
               'الضغط المطوّل على أي آية يفتح خياراتها: التفسير والمشاركة والاستماع. اضغط «التالي» وسنفتحها لك الآن.',
@@ -154,7 +185,9 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen> {
           description:
               'من هذه القائمة تفتح التفسير مباشرة. اضغط «التالي» لنغلق القائمة ونكمل الجولة.',
           icon: Icons.menu_book_outlined,
+          onEnter: () => unawaited(_openVerseOptions()),
           onNext: _closeVerseOptions,
+          onExit: _closeVerseOptions,
         ),
         TourStep(
           targetKey: k.quickBar,
@@ -175,14 +208,6 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen> {
               'تجد هذه الجولة في الإعدادات متى ما أردت إعادتها. قراءة مباركة.',
         ),
       ];
-
-  void _onPageChanged(int page) {
-    if (widget.tour.status == TourStatus.running &&
-        widget.tour.index == GoldenDemoScreen.swipeStepIndex &&
-        page == 1) {
-      widget.tour.next();
-    }
-  }
 
   @override
   void initState() {
@@ -207,10 +232,10 @@ class _GoldenDemoScreenState extends State<GoldenDemoScreen> {
             Expanded(
               key: k.pageView,
               child: PageView(
-                onPageChanged: _onPageChanged,
+                controller: widget.pageController,
                 children: [
-                  _mushafPage(pageOneText, null),
-                  _mushafPage(pageTwoText, k.pageText),
+                  _mushafPage(pageOneText, k.pageText),
+                  _mushafPage(pageTwoText, null),
                 ],
               ),
             ),
@@ -291,6 +316,8 @@ void main() {
     addTearDown(tester.view.reset);
 
     final keys = DemoKeys();
+    final pageController = PageController();
+    addTearDown(pageController.dispose);
     final tour = SpotlightTourController();
     await tester.pumpWidget(MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -300,7 +327,8 @@ void main() {
       ),
       home: Directionality(
         textDirection: TextDirection.rtl,
-        child: GoldenDemoScreen(keys: keys, tour: tour),
+        child: GoldenDemoScreen(
+            keys: keys, tour: tour, pageController: pageController),
       ),
     ));
     await tester.pump();
@@ -312,7 +340,9 @@ void main() {
     await expectLater(
         find.byType(MaterialApp), matchesGoldenFile('goldens/tour_intro.png'));
 
-    // To the swipe-teaching step: no Next button, a hint pill instead.
+    // To the swipe-teaching step: it demonstrates the swipe by itself —
+    // the page slides rightward and comes back, no user gesture required.
+    final startPixels = pageController.position.pixels;
     await tester.tap(find.text('ابدأ الجولة'));
     await tester.pump();
     // Mid-entrance: the staggered card content is still fading in (title
@@ -323,6 +353,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 170)); // mid entrance
     await expectLater(find.byType(MaterialApp),
         matchesGoldenFile('goldens/tour_stagger.png'));
+
+    // The automatic demonstration really moves the page rightward without
+    // committing a page change. Capture it mid-slide: the page content is
+    // visibly displaced while the page index stays 0.
+    var moved = 0.0;
+    for (var i = 0; i < 80; i++) {
+      moved = pageController.position.pixels - startPixels;
+      if (moved > 60) break;
+      await tester.pump(const Duration(milliseconds: 30));
+    }
+    expect(moved, greaterThan(60),
+        reason: 'the auto demonstration should visibly slide the page');
+    expect(pageController.page!.round(), 0,
+        reason: 'the demonstration must never commit a page change');
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_swipe_demo.png'));
+
     // The swipe indicator demonstrates the gesture itself: an orb gliding
     // from the left edge of the page to the right. Capture it at two
     // deterministic points of its cycle; the orb must visibly move right.
@@ -349,13 +396,17 @@ void main() {
         matchesGoldenFile('goldens/tour_swipe_move.png'));
     await settle(tester);
 
-    // A REAL drag inside the spotlight passes through the backdrop to the
-    // PageView: the page turns and the app's onPageChanged advances the tour.
-    await tester.drag(find.byKey(keys.pageView), const Offset(320, 0)); // RTL: content moves with the finger toward the right to reveal page 2
+    // The demonstration has ended: the page is back EXACTLY where the user
+    // left it (page 0, offset 0 — but the mechanism restores any page, see
+    // the PageSwipeDemo widget tests with a non-zero starting page).
+    expect(pageController.page!.round(), 0);
+    expect(pageController.position.pixels,
+        moreOrLessEquals(startPixels, epsilon: 0.001));
+
+    // Next: the verse contour step. The highlight glides from the whole
+    // PageView to the verse's text-lines contour, morphing line by line.
+    await tester.tap(find.text('التالي'));
     await tester.pump();
-    // Mid-morph: the highlight glides from the PageView rect to the verse's
-    // text-lines contour, morphing the contour line by line (no rectangular
-    // intermediate, no cross-fade) while the page itself is still sliding.
     // Wait deterministically for the glide to be in flight: clearly smaller
     // than the whole page, clearly larger than the landed verse contour.
     Rect spotBounds() => tester
@@ -378,9 +429,7 @@ void main() {
         matchesGoldenFile('goldens/tour_contour_land.png'));
     await settle(tester, 18);
     expect(find.text('خيارات الآية'), findsOneWidget);
-    // Regression guard for the 0.4.0 "offset verse frame": the tour advanced
-    // while the page was still sliding, and the settled contour must sit on
-    // the text's FINAL position, not frozen at its mid-slide one.
+    // The settled contour must sit exactly on the verse's final position.
     final spotPainter = tester
         .widgetList<CustomPaint>(find.byType(CustomPaint))
         .map((w) => w.painter)
@@ -390,7 +439,7 @@ void main() {
     final versePara =
         keys.pageText.currentContext!.findRenderObject()! as RenderParagraph;
     final verseOrigin = versePara.localToGlobal(Offset.zero);
-    final range = firstVerseOfPageTwo();
+    final range = secondVerseOfPageOne();
     final verseBoxes = versePara.getBoxesForSelection(
         TextSelection(baseOffset: range.start, extentOffset: range.end));
     var expLeft = double.infinity, expRight = double.negativeInfinity;
@@ -419,6 +468,49 @@ void main() {
     await tester.pump();
     await settle(tester, 18);
     expect(find.text('المشاركة'), findsNothing); // sheet was really closed
+    expect(find.text('الأزرار السريعة'), findsOneWidget);
+
+    // REGRESSION — the reported bug: going BACK to the sheet's step must
+    // re-run its setup, not just show the description. Previous reopens the
+    // verse-options sheet and the spotlight lands on التفسير inside it.
+    await tester.tap(find.text('السابق'));
+    await tester.pump();
+    await settle(tester, 18);
+    expect(find.text('التفسير'), findsNWidgets(2),
+        reason: 'returning to the step must reopen the verse-options sheet');
+    expect(find.text('المشاركة'), findsOneWidget);
+    final tafsirBox =
+        keys.tafsir.currentContext!.findRenderObject()! as RenderBox;
+    final tafsirCenter =
+        tafsirBox.localToGlobal(tafsirBox.size.center(Offset.zero));
+    final reopenedPainter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    expect(reopenedPainter.targetPath!.contains(tafsirCenter), isTrue,
+        reason: 'the spotlight must land on the sheet content again');
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_sheet_reopen.png'));
+
+    // Going back once more leaves the sheet step: its onExit closes the
+    // sheet, so the verse step shows the page as it was.
+    await tester.tap(find.text('السابق'));
+    await tester.pump();
+    await settle(tester, 18);
+    expect(find.text('المشاركة'), findsNothing);
+    expect(find.text('خيارات الآية'), findsOneWidget);
+
+    // Forward again: the sheet reopens (verse step's onNext), the tafsir
+    // step's idempotent onEnter does not double-push it, and Next closes it.
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle(tester, 18);
+    expect(find.text('المشاركة'), findsOneWidget);
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await settle(tester, 18);
+    expect(find.text('المشاركة'), findsNothing);
     expect(find.text('الأزرار السريعة'), findsOneWidget);
 
     await tester.tap(find.text('التالي'));

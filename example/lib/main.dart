@@ -30,23 +30,28 @@ const String pageOneText =
     'وَإِذَا حُيِّيتُم بِتَحِيَّةٍ فَحَيُّوا بِأَحْسَنَ مِنْهَا أَوْ رُدُّوهَا ۗ '
     'إِنَّ اللَّهَ كَانَ عَلَىٰ كُلِّ شَيْءٍ حَسِيبًا ﴿٨٦﴾ '
     'يَا أَيُّهَا الَّذِينَ آمَنُوا لَا تَتَّبِعُوا خُطُوَاتِ الشَّيْطَانِ ۚ '
-    'وَمَن يَتَّبِعْ خُطُوَاتِهِ فَإِنَّهُ يَأْمُرُ بِالْفَحْشَاءِ وَالْمُنكَرِ ﴿٢١﴾';
+    'وَمَن يَتَّبِعُ خُطُوَاتِهِ فَإِنَّهُ يَأْمُرُ بِالْفَحْشَاءِ وَالْمُنكَرِ ﴿٢١﴾';
 
-/// نص الصفحة الثانية: آيتان متتابعتان في سياق واحد، لعرض إبراز نطاق نصي.
+/// نص الصفحة الثانية.
 const String pageTwoText =
     'وَاللَّهُ لَا إِلَٰهَ إِلَّا هُوَ ۚ لَيَجْمَعَنَّكُمْ إِلَىٰ يَوْمِ الْقِيَامَةِ لَا رَيْبَ فِيهِ ۗ وَمَنْ أَصْدَقُ مِنَ اللَّهِ حَدِيثًا ﴿٨٧﴾ '
     'فَمَا لَكُمْ فِي الْمُنَافِقِينَ فِئَتَيْنِ وَاللَّهُ أَرْكَسَهُم بِمَا كَسَبُوا ۚ أَتُرِيدُونَ أَن تَهْدُوا مَنْ أَضَلَّ اللَّهُ ﴿٨٨﴾';
 
-/// نطاق الآية الأولى من الصفحة الثانية (تبدأ منتصف سطر وتنتهي منتصف سطر).
-TextRange firstVerseOfPageTwo() {
-  const marker = '﴿٨٧﴾';
-  final end = pageTwoText.indexOf(marker) + marker.length;
-  return TextRange(start: 0, end: end);
+/// نطاق الآية الثانية من الصفحة الأولى (تبدأ منتصف سطر وتنتهي منتصف سطر):
+/// تُبرز على الصفحة التي يقف عليها المستخدم نفسها، فلا تحتاج الجولة إلى
+/// تغيير صفحته ليظهر التحديد.
+TextRange secondVerseOfPageOne() {
+  const startMarker = 'يَا أَيُّهَا';
+  const endMarker = '﴿٢١﴾';
+  final start = pageOneText.indexOf(startMarker);
+  final end = pageOneText.indexOf(endMarker) + endMarker.length;
+  return TextRange(start: start, end: end);
 }
 
 /// A small Quran-reader-like screen demonstrating an *interactive* tour:
-/// the tour turns real pages, opens the real verse-options sheet and waits
-/// for real user gestures — not just explanations floating above the screen.
+/// the tour demonstrates the page swipe by itself, opens the real
+/// verse-options sheet and highlights inside it — and going BACK to a step
+/// restores exactly the UI that step needs.
 class MushafDemoScreen extends StatefulWidget {
   const MushafDemoScreen({super.key});
 
@@ -54,7 +59,8 @@ class MushafDemoScreen extends StatefulWidget {
   State<MushafDemoScreen> createState() => _MushafDemoScreenState();
 }
 
-class _MushafDemoScreenState extends State<MushafDemoScreen> {
+class _MushafDemoScreenState extends State<MushafDemoScreen>
+    with TickerProviderStateMixin {
   final _pageViewKey = GlobalKey();
   final _pageTextKey = GlobalKey();
   final _tafsirKey = GlobalKey();
@@ -63,6 +69,14 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
   final _navKey = GlobalKey();
 
   final _pageController = PageController();
+
+  /// عرض قلب الصفحة التلقائي: يحرّك الصفحة يميناً ثم يعيدها إلى موضعها
+  /// بالضبط، فلا تتغير الصفحة التي يقف عليها المستخدم.
+  late final _swipeDemo = PageSwipeDemo(
+    pageController: _pageController,
+    vsync: this,
+  );
+
   bool _verseOptionsOpen = false;
 
   /// يتذكّر أن الجولة عُرضت حتى لا تبدأ تلقائياً في كل مرة.
@@ -74,9 +88,6 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
 
   late final SpotlightTourController _tour;
 
-  /// رقم خطوة تعليم السحب داخل قائمة الخطوات.
-  static const _swipeStepIndex = 1;
-
   @override
   void initState() {
     super.initState();
@@ -85,10 +96,7 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
       // معرّف ثابت لجولة هذا القسم: لكل قسم في التطبيق معرّفه وجولته.
       tourId: 'mushaf',
       completionStore: _tourStore,
-    )
-      // إن تخطّى المستخدم الجولة أو أنهاها بينما النافذة مفتوحة، أغلقها.
-      ..onSkip = _closeVerseOptions
-      ..onFinish = _closeVerseOptions;
+    );
     // تبدأ تلقائياً أول مرة فقط؛ زر الإعادة في الأعلى يستدعي start() مباشرة.
     WidgetsBinding.instance.addPostFrameCallback((_) => _tour.startOnce());
   }
@@ -101,12 +109,16 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
 
   @override
   void dispose() {
+    _swipeDemo.dispose();
     _pageController.dispose();
     _tour.dispose();
     super.dispose();
   }
 
   /// نفس الدالة التي يستدعيها الضغط المطوّل الحقيقي على الآية.
+  ///
+  /// آمنة التكرار: إن كانت القائمة مفتوحة لا تفعل شيئاً، وهذا ما يجعل
+  /// استدعاءها في `onEnter` صحيحاً في الاتجاهين.
   Future<void> _openVerseOptions() async {
     if (_verseOptionsOpen) return;
     _verseOptionsOpen = true;
@@ -159,32 +171,44 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
     Navigator.of(context).pop();
   }
 
+  /// يحرّك الصفحة يميناً ثم يعيدها تلقائياً، دون أن يتغير موضع المستخدم.
+  ///
+  /// بنفس قاعدة النبضة: لا حركة تلقائية إطلاقاً مع «تقليل الحركة»، ويكفي
+  /// حينها وصف الخطوة نفسه.
+  void _demonstrateSwipe() {
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return;
+    unawaited(_swipeDemo.demonstrate(TourSwipeDirection.leftToRight));
+  }
+
   List<TourStep> _buildSteps() => [
         const TourStep(
           title: 'جولة تفاعلية',
           description:
-              'هذه الجولة لا تشرح فقط، بل تنفّذ معك: ستقلب الصفحة بنفسك، وستفتح الجولة خيارات الآية الحقيقية لتشرحها لك.',
+              'هذه الجولة لا تشرح فقط، بل تنفّذ معك: سترى كيف تُقلب الصفحة، وستفتح الجولة خيارات الآية الحقيقية لتشرحها لك.',
         ),
-        // خطوة تفاعلية: اللمس يمر عبر التعتيم إلى المصحف نفسه، ولا «التالي»
-        // هنا — تتقدم الجولة عندما يسحب المستخدم الصفحة فعلاً.
+        // خطوة تعليم قلب الصفحة: بدل أن نطلب من المستخدم أن يسحب بنفسه،
+        // تحرّك الجولة الصفحةَ يميناً ثم تُعيدها إلى موضعها بالضبط، وتبقى
+        // صفحته كما هي. (الطريقة القديمة — تمرير السحبة الحقيقية وانتظارها
+        // عبر interaction + requireInteraction — ما زالت متاحة لمن أرادها.)
         TourStep(
           targetKey: _pageViewKey,
           title: 'قلّب الصفحات',
           description:
-              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً. جرّب الآن: اسحب الصفحة لتنتقل الجولة معك.',
+              'يمكنك التنقل بين صفحات المصحف بالسحب يميناً أو يساراً، كما تتحرك الصفحة الآن أمامك ثم تعود إلى مكانها.',
           icon: Icons.swipe_outlined,
           // المؤشّر يتحرّك من اليسار إلى اليمين ليعلّم سحبة قلب الصفحة.
           indicator: TourIndicator.swipeLeftToRight,
-          interaction: TourTargetInteraction.swipe,
-          requireInteraction: true,
-          interactionHint: 'اسحب الصفحة للمتابعة',
+          onEnter: _demonstrateSwipe,
+          // إن غادر المستخدم الخطوة (أو تخطّى الجولة) أثناء العرض، تُلغى
+          // الحركة فوراً وتعود الصفحة إلى موضعها.
+          onExit: _swipeDemo.cancel,
         ),
         // ضغط «التالي» هنا ينفّذ نفس دالة الضغط المطوّل في التطبيق، فتفتح
         // خيارات الآية الحقيقية، ثم تكمل الجولة الشرح عليها.
         TourStep(
           targetKey: _pageTextKey,
           shape: TourTargetShape.textLines,
-          textRange: firstVerseOfPageTwo(),
+          textRange: secondVerseOfPageOne(),
           title: 'خيارات الآية',
           description:
               'الضغط المطوّل على أي آية يفتح خياراتها: التفسير والمشاركة والاستماع. اضغط «التالي» وسنفتحها لك الآن.',
@@ -194,14 +218,18 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
           onNext: () => unawaited(_openVerseOptions()),
         ),
         // هدف داخل النافذة المنبثقة: ترتفع الجولة فوقها تلقائياً وتبرز
-        // «التفسير». ضغط «التالي» يغلق النافذة قبل متابعة الجولة.
+        // «التفسير». العودة بـ«السابق» إلى هذه الخطوة تعيد فتح القائمة من
+        // جديد، لأن onEnter يعمل في الاتجاهين (ودالة الفتح آمنة التكرار)،
+        // وonExit يغلقها عند مغادرة الخطوة في أي اتجاه.
         TourStep(
           targetKey: _tafsirKey,
           title: 'التفسير',
           description:
               'من هذه القائمة تفتح التفسير مباشرة. اضغط «التالي» لنغلق القائمة ونكمل الجولة.',
           icon: Icons.menu_book_outlined,
+          onEnter: () => unawaited(_openVerseOptions()),
           onNext: _closeVerseOptions,
+          onExit: _closeVerseOptions,
         ),
         TourStep(
           targetKey: _quickBarKey,
@@ -221,15 +249,6 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
           description: 'تجد هذه الجولة في الإعدادات متى ما أردت إعادتها.',
         ),
       ];
-
-  /// عندما يقلب المستخدم الصفحة فعلاً أثناء خطوة تعليم السحب، تتقدم الجولة.
-  void _onPageChanged(int page) {
-    if (_tour.status == TourStatus.running &&
-        _tour.index == _swipeStepIndex &&
-        page == 1) {
-      _tour.next();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -258,10 +277,9 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
               key: _pageViewKey,
               child: PageView(
                 controller: _pageController,
-                onPageChanged: _onPageChanged,
                 children: [
-                  _mushafPage(pageOneText, null),
-                  _mushafPage(pageTwoText, _pageTextKey),
+                  _mushafPage(pageOneText, _pageTextKey),
+                  _mushafPage(pageTwoText, null),
                 ],
               ),
             ),

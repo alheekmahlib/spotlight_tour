@@ -16,6 +16,8 @@ class TourTooltipCard extends StatelessWidget {
     required this.theme,
     required this.labels,
     required this.controller,
+    this.entrance,
+    this.stagger = false,
   });
 
   final TourStep step;
@@ -25,7 +27,38 @@ class TourTooltipCard extends StatelessWidget {
   final TourLabels labels;
   final SpotlightTourController controller;
 
+  /// The card's entrance animation (0..1). When [stagger] is true, the
+  /// header, title, body and buttons fade and slide in one after another
+  /// over the second half of the entrance instead of appearing at once.
+  final Animation<double>? entrance;
+
+  /// Whether to stagger the content's entrance. Off for reduced motion and
+  /// when [SpotlightTourTheme.contentStagger] is false.
+  final bool stagger;
+
   bool get _isIntro => step.targetKey == null && index == 0;
+
+  /// Wraps [child] in a fade + gentle upward slide over [start]..[end] of
+  /// the entrance animation. Without stagger (or after it) the child is
+  /// returned as is, so the settled card has zero animation overhead.
+  Widget _staggered(Widget child, double start, double end) {
+    final animation = entrance;
+    if (!stagger || animation == null) return child;
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Interval(start, end, curve: Curves.easeOutCubic),
+    );
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.05),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,35 +79,53 @@ class TourTooltipCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              _SkipPill(theme: theme, label: labels.skip, onTap: controller.skip),
-              if (!_isIntro) ...[
-                Expanded(
-                  child: Container(
-                    height: 1,
-                    margin: const EdgeInsetsDirectional.symmetric(horizontal: 12),
-                    color: theme.accentColor.withValues(alpha: 0.4),
+          _staggered(
+            Row(
+              children: [
+                _SkipPill(
+                    theme: theme, label: labels.skip, onTap: controller.skip),
+                if (!_isIntro) ...[
+                  Expanded(
+                    child: Container(
+                      height: 1,
+                      margin: const EdgeInsetsDirectional.symmetric(
+                          horizontal: 12),
+                      color: theme.accentColor.withValues(alpha: 0.4),
+                    ),
                   ),
-                ),
-                if (step.icon != null) ...[
-                  Icon(step.icon, size: 15, color: theme.accentColor),
-                  const SizedBox(width: 5),
-                ],
-                Text(labels.counter(index + 1, total), style: theme.counterStyle),
-              ] else
-                const Spacer(),
-            ],
+                  if (step.icon != null) ...[
+                    Icon(step.icon, size: 15, color: theme.accentColor),
+                    const SizedBox(width: 5),
+                  ],
+                  Text(labels.counter(index + 1, total),
+                      style: theme.counterStyle),
+                ] else
+                  const Spacer(),
+              ],
+            ),
+            0.0,
+            0.55,
           ),
           const SizedBox(height: 14),
-          Text(step.title, style: theme.titleStyle, textAlign: TextAlign.start),
+          _staggered(
+            Text(step.title,
+                style: theme.titleStyle, textAlign: TextAlign.start),
+            0.15,
+            0.7,
+          ),
           const SizedBox(height: 6),
-          Text(step.description, style: theme.bodyStyle, textAlign: TextAlign.start),
+          _staggered(
+            Text(step.description,
+                style: theme.bodyStyle, textAlign: TextAlign.start),
+            0.3,
+            0.85,
+          ),
           const SizedBox(height: 18),
           // Rebuilds on controller notifications so the busy state (a step
           // action running, or the transition animation) disables the
           // buttons while the tour moves.
-          ListenableBuilder(
+          _staggered(
+            ListenableBuilder(
             listenable: controller,
             builder: (context, _) {
               final busy = controller.isBusy;
@@ -89,7 +140,8 @@ class TourTooltipCard extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 10),
-                          child: Text(labels.previous, style: theme.previousStyle),
+                          child: Text(labels.previous,
+                              style: theme.previousStyle),
                         ),
                       ),
                     ),
@@ -97,7 +149,8 @@ class TourTooltipCard extends StatelessWidget {
                     child: step.requireInteraction
                         ? _InteractionHint(
                             theme: theme,
-                            text: step.interactionHint ?? labels.interactionHint,
+                            text:
+                                step.interactionHint ?? labels.interactionHint,
                           )
                         : SizedBox(
                             height: theme.primaryButtonHeight,
@@ -128,6 +181,9 @@ class TourTooltipCard extends StatelessWidget {
                 ],
               );
             },
+          ),
+            0.45,
+            1.0,
           ),
         ],
       ),

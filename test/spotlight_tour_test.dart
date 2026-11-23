@@ -514,4 +514,193 @@ void main() {
     expect(controller.index, 1);
     expect(find.text('الخطوة الثانية'), findsOneWidget);
   });
+
+  List<PulsePainter> pulsePainters(WidgetTester tester) => tester
+      .widgetList<CustomPaint>(find.byType(CustomPaint))
+      .map((w) => w.painter)
+      .whereType<PulsePainter>()
+      .toList();
+
+  Widget buildAppWith(
+    SpotlightTourController controller,
+    List<GlobalKey> keys, {
+    SpotlightTourTheme? theme,
+    bool disableAnimations = false,
+  }) {
+    return MediaQuery(
+      data: MediaQueryData(
+        size: const Size(390, 844),
+        disableAnimations: disableAnimations,
+      ),
+      child: MaterialApp(
+        home: Directionality(
+          textDirection: TextDirection.rtl,
+          child: SpotlightTour(
+            controller: controller,
+            theme: theme,
+            child: Scaffold(
+              body: Column(
+                children: [
+                  Container(key: keys[0], height: 60, color: Colors.blue),
+                  const Spacer(),
+                  Container(key: keys[1], height: 60, color: Colors.green),
+                  const Spacer(),
+                  Container(key: keys[2], height: 60, color: Colors.red),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  testWidgets('bounded pulse rests after its cycles', (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final controller = SpotlightTourController(steps: stepsFor(keys));
+    final theme = SpotlightTourTheme.gold().copyWith(
+      pulseRepeatCount: () => 2,
+    );
+
+    await tester.pumpWidget(buildAppWith(controller, keys, theme: theme));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // Pulse is running early on.
+    expect(pulsePainters(tester), isNotEmpty);
+
+    // After two 1.5s cycles (plus margin) the orb is gone: nothing keeps
+    // repainting while the user reads.
+    await tester.pump(const Duration(milliseconds: 3100));
+    await tester.pump();
+    expect(pulsePainters(tester), isEmpty);
+    // The tour itself is still fully alive.
+    expect(find.text('1 من 3'), findsOneWidget);
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(find.text('2 من 3'), findsOneWidget);
+    // The pulse restarted for the new step.
+    expect(pulsePainters(tester), isNotEmpty);
+  });
+
+  testWidgets('pulseRepeatCount null keeps the pulse repeating', (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final controller = SpotlightTourController(steps: stepsFor(keys));
+    final theme = SpotlightTourTheme.gold().copyWith(
+      pulseRepeatCount: () => null,
+    );
+
+    await tester.pumpWidget(buildAppWith(controller, keys, theme: theme));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 5000));
+    expect(pulsePainters(tester), isNotEmpty);
+  });
+
+  testWidgets('reduced motion: no pulse, instant spotlight, short card fade',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final controller = SpotlightTourController(steps: stepsFor(keys));
+
+    await tester.pumpWidget(
+        buildAppWith(controller, keys, disableAnimations: true));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('1 من 3'), findsOneWidget);
+    expect(pulsePainters(tester), isEmpty);
+
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    // Morph duration is zero: a single short settle reaches the next step.
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('2 من 3'), findsOneWidget);
+    expect(pulsePainters(tester), isEmpty);
+  });
+
+  testWidgets('glowSigma 0 skips the blur but keeps the border', (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final controller = SpotlightTourController(steps: stepsFor(keys));
+    final theme = SpotlightTourTheme.gold().copyWith(glowSigma: 0);
+
+    await tester.pumpWidget(buildAppWith(controller, keys, theme: theme));
+    controller.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    final painter = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((w) => w.painter)
+        .whereType<SpotlightPainter>()
+        .first;
+    expect(painter.glowSigma, 0);
+    expect(painter.targetPath, isNotNull);
+    expect(find.text('1 من 3'), findsOneWidget);
+  });
+
+  testWidgets('startOnce runs the tour once and remembers completion',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final store = InMemoryTourCompletionStore();
+    final controller = SpotlightTourController(
+      steps: stepsFor(keys),
+      tourId: 'home',
+      completionStore: store,
+    );
+
+    await tester.pumpWidget(buildAppWith(controller, keys));
+    expect(await controller.startOnce(), isTrue);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('1 من 3'), findsOneWidget);
+
+    // Finishing the tour records completion.
+    controller.finish();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(await store.isCompleted('home'), isTrue);
+
+    // A second auto-start does nothing.
+    expect(await controller.startOnce(), isFalse);
+    await tester.pump();
+    expect(controller.status, TourStatus.idle);
+
+    // Resetting (e.g. from a "show the tour again" setting) re-enables it.
+    await store.reset('home');
+    expect(await controller.startOnce(), isTrue);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('1 من 3'), findsOneWidget);
+  });
+
+  testWidgets('skip marks completion unless markCompletedOnSkip is false',
+      (tester) async {
+    final keys = List.generate(3, (_) => GlobalKey());
+    final store = InMemoryTourCompletionStore();
+    final controller = SpotlightTourController(
+      steps: stepsFor(keys),
+      tourId: 'home',
+      completionStore: store,
+      markCompletedOnSkip: false,
+    );
+
+    await tester.pumpWidget(buildAppWith(controller, keys));
+    expect(await controller.startOnce(), isTrue);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    controller.skip();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(await store.isCompleted('home'), isFalse);
+    // Not marked: the next auto-start runs the tour again.
+    expect(await controller.startOnce(), isTrue);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(controller.status, TourStatus.running);
+  });
 }

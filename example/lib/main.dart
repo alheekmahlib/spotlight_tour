@@ -65,6 +65,13 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
   final _pageController = PageController();
   bool _verseOptionsOpen = false;
 
+  /// يتذكّر أن الجولة عُرضت حتى لا تبدأ تلقائياً في كل مرة.
+  ///
+  /// هذا المخزن يعيش في الذاكرة فقط؛ في تطبيق حقيقي استبدله بمخزن دائم
+  /// فوق `get_storage` أو `shared_preferences` كما في توثيق
+  /// [TourCompletionStore] — الواجهة ثلاث دوال فقط.
+  final _tourStore = InMemoryTourCompletionStore();
+
   late final SpotlightTourController _tour;
 
   /// رقم خطوة تعليم السحب داخل قائمة الخطوات.
@@ -73,11 +80,23 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
   @override
   void initState() {
     super.initState();
-    _tour = SpotlightTourController(steps: _buildSteps())
+    _tour = SpotlightTourController(
+      steps: _buildSteps(),
+      // معرّف ثابت لجولة هذا القسم: لكل قسم في التطبيق معرّفه وجولته.
+      tourId: 'mushaf',
+      completionStore: _tourStore,
+    )
       // إن تخطّى المستخدم الجولة أو أنهاها بينما النافذة مفتوحة، أغلقها.
       ..onSkip = _closeVerseOptions
       ..onFinish = _closeVerseOptions;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _tour.start());
+    // تبدأ تلقائياً أول مرة فقط؛ زر الإعادة في الأعلى يستدعي start() مباشرة.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tour.startOnce());
+  }
+
+  /// زر «أعد الجولة»: يمسح علامة الإكمال ثم يبدأ الجولة فوراً.
+  Future<void> _replayTour() async {
+    await _tourStore.reset('mushaf');
+    _tour.start();
   }
 
   @override
@@ -223,6 +242,11 @@ class _MushafDemoScreenState extends State<MushafDemoScreen> {
               key: _searchKey,
               icon: const Icon(Icons.search),
               onPressed: () {},
+            ),
+            IconButton(
+              icon: const Icon(Icons.replay),
+              tooltip: 'إعادة الجولة',
+              onPressed: _replayTour,
             ),
           ],
         ),

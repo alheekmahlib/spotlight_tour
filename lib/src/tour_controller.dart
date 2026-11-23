@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
+import 'tour_completion.dart';
 import 'tour_step.dart';
 
 /// Lifecycle of a tour run.
@@ -20,7 +23,27 @@ enum TourStatus {
 /// the [SpotlightTour] widget, then call [start] when the tour should begin
 /// (first launch, a "replay the tour" button, ...).
 class SpotlightTourController extends ChangeNotifier {
-  SpotlightTourController({List<TourStep>? steps}) : _steps = steps ?? const [];
+  SpotlightTourController({
+    List<TourStep>? steps,
+    this.tourId,
+    TourCompletionStore? completionStore,
+    this.markCompletedOnSkip = true,
+  })  : _steps = steps ?? const [],
+        completionStore = completionStore ?? InMemoryTourCompletionStore();
+
+  /// Stable identifier of this tour, used with [completionStore] by
+  /// [startOnce]. Give every section of the app its own id (`'mushaf'`,
+  /// `'audio'`, `'adhkar'`, ...) so each section's tour auto-starts once,
+  /// independently of the others. `null` disables completion tracking.
+  final String? tourId;
+
+  /// Where completion of [tourId] is recorded. Defaults to an in-memory
+  /// store; see [TourCompletionStore] for wiring it to the app's storage.
+  final TourCompletionStore completionStore;
+
+  /// Whether skipping the tour also marks [tourId] completed, so a skipped
+  /// first-launch tour does not auto-start again. Default: true.
+  final bool markCompletedOnSkip;
 
   List<TourStep> _steps;
   int _index = 0;
@@ -89,6 +112,29 @@ class SpotlightTourController extends ChangeNotifier {
     onStepChanged?.call(_index);
   }
 
+  /// Starts the tour only if [tourId] is not yet marked completed in
+  /// [completionStore]. Returns whether the tour actually started.
+  ///
+  /// This is the first-launch pattern: call it from a post-frame callback
+  /// on screens whose tour should auto-run exactly once. A "replay the
+  /// tour" button should call [start] directly instead.
+  ///
+  /// Requires [tourId]; without one it behaves like [start] and returns
+  /// true, because there is nothing to track.
+  Future<bool> startOnce({List<TourStep>? steps, int initialIndex = 0}) async {
+    final id = tourId;
+    if (id != null) {
+      try {
+        if (await completionStore.isCompleted(id)) return false;
+      } catch (_) {
+        // A failing store must not block the tour: run it anyway.
+      }
+    }
+    if (_status != TourStatus.idle) return false;
+    start(steps: steps, initialIndex: initialIndex);
+    return _status == TourStatus.running;
+  }
+
   /// Advances to the next step, or finishes on the last one.
   ///
   /// Also called programmatically by the app's own gesture handlers on
@@ -118,6 +164,7 @@ class SpotlightTourController extends ChangeNotifier {
     if (_status != TourStatus.running) return;
     _finishedByConfirm = false;
     _status = TourStatus.closing;
+    if (markCompletedOnSkip) _recordCompletion();
     notifyListeners();
     onSkip?.call();
   }
@@ -128,8 +175,18 @@ class SpotlightTourController extends ChangeNotifier {
     if (_status != TourStatus.running) return;
     _finishedByConfirm = true;
     _status = TourStatus.closing;
+    _recordCompletion();
     notifyListeners();
     onFinish?.call();
+  }
+
+  /// Records [tourId] in [completionStore]; failures are ignored so a
+  /// broken store can never wedge the tour.
+  void _recordCompletion() {
+    final id = tourId;
+    if (id == null) return;
+    unawaited(Future(() => completionStore.markCompleted(id))
+        .catchError((_) {}));
   }
 
   /// Internal: the overlay calls this once its exit animation completed.

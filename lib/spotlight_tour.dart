@@ -2,6 +2,7 @@
 /// spotlight highlight, pulse animation and an animated tooltip card.
 library;
 
+export 'src/tour_completion.dart';
 export 'src/tour_controller.dart';
 export 'src/tour_labels.dart';
 export 'src/tour_step.dart';

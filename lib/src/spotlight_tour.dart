@@ -78,6 +78,23 @@ class _SpotlightTourState extends State<SpotlightTour>
   /// index while the exit/enter animation runs).
   int _displayedIndex = 0;
 
+  /// Cached result of the system's reduced-motion setting
+  /// (`MediaQuery.disableAnimations`), refreshed when the tour starts and on
+  /// every step transition. When true: no pulse, instant spotlight moves and
+  /// a short fade instead of the card's slide.
+  bool _reduceMotion = false;
+
+  /// True when the pulse should not be painted: the step disables it,
+  /// reduced motion is on, the theme sets `pulseRepeatCount: 0`, or a
+  /// bounded pulse has finished its cycles on this step.
+  bool _pulsesDone = true;
+
+  /// Set when the card's content changed and its size must be re-measured
+  /// after the next layout. Keeps a post-frame measurement callback from
+  /// being registered on every animation frame (the 0.3.0 behaviour, which
+  /// ran one callback per pulse tick for as long as the tour was visible).
+  bool _cardSizeDirty = true;
+
   /// True while a step action / transition pipeline is running.
   bool _transitioning = false;
 
@@ -106,6 +123,7 @@ class _SpotlightTourState extends State<SpotlightTour>
     _cardCtrl = AnimationController(vsync: this, value: 0);
     _morphCtrl = AnimationController(vsync: this);
     _pulseCtrl = AnimationController(vsync: this);
+    _pulseCtrl.addStatusListener(_onPulseStatus);
     widget.controller.addListener(_onController);
   }
 
@@ -141,20 +159,69 @@ class _SpotlightTourState extends State<SpotlightTour>
   void _show() {
     _closing = false;
     _textDirection = Directionality.maybeOf(context) ?? TextDirection.ltr;
+    _reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     _displayedIndex = widget.controller.index;
+    _cardSizeDirty = true;
     _entry = OverlayEntry(builder: _buildOverlay);
     Overlay.of(context).insert(_entry!);
 
-    _scrimCtrl.duration = _theme.scrimFadeDuration;
-    _cardCtrl.duration = _theme.cardEnterDuration;
+    _scrimCtrl.duration = _scrimFade;
+    _cardCtrl.duration = _cardEnter;
     _pulseCtrl.duration = _theme.pulseDuration;
     _scrimCtrl.forward(from: 0);
     _cardCtrl.forward(from: 0);
-    _pulseCtrl.repeat();
 
     // Resolve the first target after running the step's onEnter hook, the
     // same pipeline used between steps (minus the exit animation).
     unawaited(_goToStep(_displayedIndex, forward: true, initial: true));
+  }
+
+  // Durations honour the reduced-motion setting: a short fade replaces the
+  // scrim/card motion and the spotlight jumps instead of gliding.
+  Duration get _scrimFade => _reduceMotion
+      ? const Duration(milliseconds: 120)
+      : _theme.scrimFadeDuration;
+  Duration get _cardEnter => _reduceMotion
+      ? const Duration(milliseconds: 120)
+      : _theme.cardEnterDuration;
+  Duration get _cardExit => _reduceMotion
+      ? const Duration(milliseconds: 100)
+      : _theme.cardExitDuration;
+  Duration get _morphDuration =>
+      _reduceMotion ? Duration.zero : _theme.spotlightMorphDuration;
+
+  /// (Re)starts the pulse for a step that just became active.
+  ///
+  /// The pulse is bounded by [SpotlightTourTheme.pulseRepeatCount]: after
+  /// that many cycles the orb rests, so the overlay stops scheduling frames
+  /// while the user reads. `null` repeats forever, `0` turns the pulse off.
+  void _startPulse(TourStep step) {
+    _pulseCtrl.stop();
+    final count = _theme.pulseRepeatCount;
+    if (!step.showPulse || _reduceMotion || count == 0) {
+      if (!_pulsesDone) {
+        _pulsesDone = true;
+        _entry?.markNeedsBuild();
+      }
+      return;
+    }
+    _pulsesDone = false;
+    _pulseCtrl.duration = _theme.pulseDuration;
+    if (count == null) {
+      _pulseCtrl.repeat();
+    } else {
+      _pulseCtrl.repeat(count: count);
+    }
+    _entry?.markNeedsBuild();
+  }
+
+  void _onPulseStatus(AnimationStatus status) {
+    // A bounded pulse parks the controller at value 1.0, which would paint
+    // a frozen bright orb: hide it instead.
+    if (status == AnimationStatus.completed && !_pulsesDone) {
+      _pulsesDone = true;
+      _entry?.markNeedsBuild();
+    }
   }
 
   /// Runs the last step's [TourStep.onNext] when the tour ended via its Done
@@ -176,8 +243,9 @@ class _SpotlightTourState extends State<SpotlightTour>
 
   Future<void> _dismiss() async {
     _pulseCtrl.stop();
-    _cardCtrl.duration = _theme.cardExitDuration;
-    _scrimCtrl.reverseDuration = _theme.scrimFadeDuration;
+    _pulsesDone = true;
+    _cardCtrl.duration = _cardExit;
+    _scrimCtrl.reverseDuration = _scrimFade;
     try {
       await Future.wait(
           [_cardCtrl.reverse().orCancel, _scrimCtrl.reverse().orCancel]);
@@ -213,6 +281,9 @@ class _SpotlightTourState extends State<SpotlightTour>
     if (_transitioning) return;
     _transitioning = true;
     c.setBusy(true);
+    // Read before any await: the setting can change between frames, and the
+    // context is unsafe to use across the async gaps below.
+    _reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     try {
       final fromTarget = _resolveTarget(c.steps[_displayedIndex]);
 
@@ -230,7 +301,7 @@ class _SpotlightTourState extends State<SpotlightTour>
         if (aborted()) return;
         _raiseEntry();
 
-        _cardCtrl.duration = _theme.cardExitDuration;
+        _cardCtrl.duration = _cardExit;
         try {
           await _cardCtrl.reverse().orCancel;
         } on TickerCanceled {
@@ -240,6 +311,7 @@ class _SpotlightTourState extends State<SpotlightTour>
       }
 
       _displayedIndex = index;
+      _cardSizeDirty = true;
       final toStep = c.steps[index];
       try {
         await toStep.onEnter?.call();
@@ -255,23 +327,26 @@ class _SpotlightTourState extends State<SpotlightTour>
       _target = toTarget;
       if (!initial) {
         // The morph animates the bounding shape between steps. When the
-        // destination is a text-lines contour, the precise stepped outline
-        // is drawn as soon as the glide ends (there is no meaningful lerp
+        // destination is a text-lines contour, the border cross-fades to
+        // the precise stepped outline during the last part of the glide
+        // (see SpotlightPainter.contourBlend); the cutout itself switches
+        // to the contour when the glide ends (there is no meaningful lerp
         // between contours with different line counts).
         _morphFrom = fromTarget?.bounds;
         _morphTo = toTarget?.bounds;
-        _morphCtrl.duration = _theme.spotlightMorphDuration;
+        _morphCtrl.duration = _morphDuration;
         _entry?.markNeedsBuild();
         unawaited(_morphCtrl.forward(from: 0).then((_) {
           _morphFrom = null;
           _morphTo = null;
           if (mounted) _entry?.markNeedsBuild();
         }));
-        _cardCtrl.duration = _theme.cardEnterDuration;
+        _cardCtrl.duration = _cardEnter;
         unawaited(_cardCtrl.forward(from: 0));
       } else {
         _entry?.markNeedsBuild();
       }
+      _startPulse(toStep);
     } finally {
       _transitioning = false;
       if (mounted && c.status == TourStatus.running) {
@@ -462,26 +537,40 @@ class _SpotlightTourState extends State<SpotlightTour>
     final step = c.steps[_displayedIndex];
     final media = MediaQuery.of(overlayContext);
 
+    // The overlay rebuilds on the scrim, card and morph controllers only.
+    // The pulse has its own AnimatedBuilder below, inside a RepaintBoundary:
+    // in 0.3.0 every pulse tick rebuilt and repainted the full-screen scrim
+    // (including the blur glow) for as long as the tour was visible.
     return AnimatedBuilder(
-      animation:
-          Listenable.merge([_scrimCtrl, _cardCtrl, _morphCtrl, _pulseCtrl]),
+      animation: Listenable.merge([_scrimCtrl, _cardCtrl, _morphCtrl]),
       builder: (context, _) {
         final rect = _animatedRect;
         final path = _animatedPath;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final size = _cardKey.currentContext?.size;
-          if (size != null && size != _cardSize && mounted) {
-            _cardSize = size;
-            _entry?.markNeedsBuild();
-          }
-        });
+        final morphing = _morphFrom != null || _morphTo != null;
+        // While gliding towards a text-lines target, cross-fade the border
+        // to the precise contour over the last 40% of the morph.
+        final contour = morphing ? _target?.path : null;
+        final contourBlend = contour == null
+            ? 0.0
+            : ((_morphCtrl.value - 0.6) / 0.4).clamp(0.0, 1.0);
+        if (_cardSizeDirty) {
+          _cardSizeDirty = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final size = _cardKey.currentContext?.size;
+            if (size != null && size != _cardSize && mounted) {
+              _cardSize = size;
+              _cardSizeDirty = true;
+              _entry?.markNeedsBuild();
+            }
+          });
+        }
         final card = KeyedSubtree(
           key: _cardKey,
           child: Padding(
             padding: theme.cardMargin,
             child: SlideTransition(
               position: Tween<Offset>(
-                begin: const Offset(0, 0.18),
+                begin: _reduceMotion ? Offset.zero : const Offset(0, 0.18),
                 end: Offset.zero,
               ).animate(CurvedAnimation(
                   parent: _cardCtrl, curve: Curves.easeOutCubic)),
@@ -495,6 +584,8 @@ class _SpotlightTourState extends State<SpotlightTour>
                   theme: theme,
                   labels: widget.labels,
                   controller: c,
+                  entrance: _cardCtrl,
+                  stagger: theme.contentStagger && !_reduceMotion,
                 ),
               ),
             ),
@@ -526,12 +617,16 @@ class _SpotlightTourState extends State<SpotlightTour>
                           scrimOpacity: _scrimCtrl.value,
                           tapThroughTarget: !_transitioning &&
                               step.interaction != TourTargetInteraction.none,
+                          contourPath: contour,
+                          contourBlend: contourBlend,
                         ),
                       ),
                     ),
                   ),
-                  // Pulse orb on the target.
-                  if (rect != null && step.showPulse)
+                  // Pulse orb on the target. Isolated in its own
+                  // RepaintBoundary + AnimatedBuilder: while it runs, only
+                  // this small layer repaints, not the full-screen scrim.
+                  if (rect != null && !_pulsesDone)
                     Builder(builder: (context) {
                       final side = (rect.outerRect.shortestSide * 0.9)
                           .clamp(36.0, 110.0);
@@ -542,8 +637,14 @@ class _SpotlightTourState extends State<SpotlightTour>
                         width: side,
                         height: side,
                         child: IgnorePointer(
-                          child: CustomPaint(
-                            painter: PulsePainter(progress: _pulseCtrl.value),
+                          child: RepaintBoundary(
+                            child: AnimatedBuilder(
+                              animation: _pulseCtrl,
+                              builder: (context, _) => CustomPaint(
+                                painter:
+                                    PulsePainter(progress: _pulseCtrl.value),
+                              ),
+                            ),
                           ),
                         ),
                       );

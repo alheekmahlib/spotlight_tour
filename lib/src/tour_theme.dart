@@ -28,6 +28,8 @@ class SpotlightTourTheme {
     this.cardExitDuration = const Duration(milliseconds: 200),
     this.spotlightMorphDuration = const Duration(milliseconds: 380),
     this.pulseDuration = const Duration(milliseconds: 1500),
+    this.pulseRepeatCount = 4,
+    this.contentStagger = true,
   });
 
   /// Dimmed backdrop color. Its alpha controls how dark the app gets.
@@ -58,7 +60,9 @@ class SpotlightTourTheme {
   /// Stroke width of the highlight border.
   final double borderWidth;
 
-  /// Blur sigma of the outer glow around the highlight.
+  /// Blur sigma of the outer glow around the highlight. Set to `0` to skip
+  /// the blur entirely: it is the single most expensive paint of the tour,
+  /// and the crisp border alone still reads clearly on low-end devices.
   final double glowSigma;
 
   /// Vertical gap between the spotlight and the tooltip card.
@@ -76,6 +80,18 @@ class SpotlightTourTheme {
 
   /// One full pulse cycle (grow + fade).
   final Duration pulseDuration;
+
+  /// How many pulse cycles play when a step becomes active before the orb
+  /// rests. A bounded pulse keeps the screen from repainting at 60 fps for
+  /// the whole time the user reads a step (battery and low-end GPUs), and
+  /// it stops nagging visually. `null` repeats forever (the 0.3.0
+  /// behaviour), `0` disables the pulse on every step. Default: 4.
+  final int? pulseRepeatCount;
+
+  /// Whether the card's content (header, title, body, buttons) fades and
+  /// slides in with a short stagger after the card itself. Purely visual;
+  /// automatically disabled when the system asks for reduced motion.
+  final bool contentStagger;
 
   /// The exact look of the reference video.
   factory SpotlightTourTheme.gold({TextStyle? base}) {
@@ -127,6 +143,9 @@ class SpotlightTourTheme {
     Color? cardColor,
     Color? accentColor,
     Color? onAccentColor,
+    double? glowSigma,
+    int? Function()? pulseRepeatCount,
+    bool? contentStagger,
   }) {
     return SpotlightTourTheme(
       scrimColor: scrimColor ?? this.scrimColor,
@@ -143,7 +162,7 @@ class SpotlightTourTheme {
       cardPadding: cardPadding,
       cardMargin: cardMargin,
       borderWidth: borderWidth,
-      glowSigma: glowSigma,
+      glowSigma: glowSigma ?? this.glowSigma,
       targetGap: targetGap,
       primaryButtonHeight: primaryButtonHeight,
       scrimFadeDuration: scrimFadeDuration,
@@ -151,6 +170,9 @@ class SpotlightTourTheme {
       cardExitDuration: cardExitDuration,
       spotlightMorphDuration: spotlightMorphDuration,
       pulseDuration: pulseDuration,
+      pulseRepeatCount:
+          pulseRepeatCount != null ? pulseRepeatCount() : this.pulseRepeatCount,
+      contentStagger: contentStagger ?? this.contentStagger,
     );
   }
 }

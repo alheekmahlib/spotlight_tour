@@ -312,6 +312,14 @@ void main() {
     // To the swipe-teaching step: no Next button, a hint pill instead.
     await tester.tap(find.text('ابدأ الجولة'));
     await tester.pump();
+    // Mid-entrance: the staggered card content is still fading in (title
+    // visible, description and buttons on their way). The extra pump lets
+    // the async transition pipeline start the entrance animation.
+    await tester.pump(const Duration(milliseconds: 220)); // card exit ends
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 170)); // mid entrance
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_stagger.png'));
     await settle(tester);
     await expectLater(
         find.byType(MaterialApp), matchesGoldenFile('goldens/tour_swipe.png'));
@@ -320,6 +328,12 @@ void main() {
     // PageView: the page turns and the app's onPageChanged advances the tour.
     await tester.drag(find.byKey(keys.pageView), const Offset(320, 0)); // RTL: content moves with the finger toward the right to reveal page 2
     await tester.pump();
+    // Mid-morph: the highlight glides from the PageView rect to the verse's
+    // text-lines contour, cross-fading the border between the two shapes.
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump(const Duration(milliseconds: 250));
+    await expectLater(find.byType(MaterialApp),
+        matchesGoldenFile('goldens/tour_contour_morph.png'));
     await settle(tester, 18);
     expect(find.text('خيارات الآية'), findsOneWidget);
     await expectLater(

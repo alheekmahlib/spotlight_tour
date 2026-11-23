@@ -11,6 +11,8 @@ class SpotlightPainter extends CustomPainter {
     required this.glowSigma,
     required this.scrimOpacity,
     this.tapThroughTarget = false,
+    this.contourPath,
+    this.contourBlend = 0,
   });
 
   final Color scrimColor;
@@ -30,6 +32,16 @@ class SpotlightPainter extends CustomPainter {
   /// backdrop to the app's widgets below (see [TourStep.interaction]),
   /// instead of being absorbed by the tour.
   final bool tapThroughTarget;
+
+  /// The precise text-lines contour the spotlight is gliding towards, while
+  /// the animated bounding shape in [targetPath] is still morphing. When set
+  /// with [contourBlend] > 0, the border and glow are cross-faded between
+  /// [targetPath] and this contour, so a text-outline step no longer snaps
+  /// from the rounded rect to the stepped contour at the end of the glide.
+  final Path? contourPath;
+
+  /// 0..1 cross-fade from [targetPath]'s border to [contourPath]'s border.
+  final double contourBlend;
 
   @override
   bool? hitTest(Offset position) {
@@ -52,19 +64,45 @@ class SpotlightPainter extends CustomPainter {
     canvas.drawPath(scrimPath, scrimPaint);
 
     if (t != null) {
+      final blend = contourBlend.clamp(0.0, 1.0);
+      final contour = contourPath;
       // Soft outer glow, then the crisp border, both fading with the scrim.
-      final glowPaint = Paint()
-        ..color = borderColor.withValues(alpha: 0.55 * scrimOpacity)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = borderWidth
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, glowSigma);
-      canvas.drawPath(t, glowPaint);
-
+      // The glow is the most expensive paint in the tour: glowSigma 0 skips
+      // it entirely (see SpotlightTourTheme.glowSigma).
+      final glow = glowSigma > 0;
+      final glowPaint = glow
+          ? (Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = borderWidth
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, glowSigma))
+          : null;
       final borderPaint = Paint()
-        ..color = borderColor.withValues(alpha: scrimOpacity)
         ..style = PaintingStyle.stroke
         ..strokeWidth = borderWidth;
-      canvas.drawPath(t, borderPaint);
+
+      if (contour != null && blend > 0) {
+        // Cross-fade the highlight from the morphing shape to the precise
+        // contour during the last part of the glide.
+        if (blend < 1) {
+          glowPaint?.color =
+              borderColor.withValues(alpha: 0.55 * scrimOpacity * (1 - blend));
+          borderPaint.color =
+              borderColor.withValues(alpha: scrimOpacity * (1 - blend));
+          if (glow) canvas.drawPath(t, glowPaint!);
+          canvas.drawPath(t, borderPaint);
+        }
+        glowPaint?.color =
+            borderColor.withValues(alpha: 0.55 * scrimOpacity * blend);
+        borderPaint.color = borderColor.withValues(alpha: scrimOpacity * blend);
+        if (glow) canvas.drawPath(contour, glowPaint!);
+        canvas.drawPath(contour, borderPaint);
+      } else {
+        glowPaint?.color =
+            borderColor.withValues(alpha: 0.55 * scrimOpacity);
+        borderPaint.color = borderColor.withValues(alpha: scrimOpacity);
+        if (glow) canvas.drawPath(t, glowPaint!);
+        canvas.drawPath(t, borderPaint);
+      }
     }
   }
 
@@ -76,7 +114,9 @@ class SpotlightPainter extends CustomPainter {
       oldDelegate.borderWidth != borderWidth ||
       oldDelegate.glowSigma != glowSigma ||
       oldDelegate.scrimOpacity != scrimOpacity ||
-      oldDelegate.tapThroughTarget != tapThroughTarget;
+      oldDelegate.tapThroughTarget != tapThroughTarget ||
+      !identical(oldDelegate.contourPath, contourPath) ||
+      oldDelegate.contourBlend != contourBlend;
 }
 
 /// The white "tap" orb that grows and fades on top of the highlighted target.

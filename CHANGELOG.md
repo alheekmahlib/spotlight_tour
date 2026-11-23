@@ -1,3 +1,14 @@
+## 0.6.1
+
+توافق أوسع لعرض قلب الصفحة مع متحكمات PageView البديلة.
+
+- **`PageSwipeDemo.pageController` صار `ScrollController`:** العرض يستخدم
+  أصلاً `hasClients` و`position` و`jumpTo` فقط، وكلها من ScrollController،
+  فتوسيع النوع يسمح بمتحكمات لا ترث PageController مثل
+  `PreloadPageController` من package:preload_page_view (المستخدم في
+  quran_library) دون أي تغيير على المستخدمين الحاليين — PageController
+  هو ScrollController فكل الاستدعاءات السابقة تبقى صحيحة.
+
 ## 0.6.0
 
 عرض قلب الصفحة صار مؤدباً ومربوطاً: مهلة يرى فيها المستخدم الخطوة قبل أن

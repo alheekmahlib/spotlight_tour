@@ -41,7 +41,7 @@ class PageSwipeDemoIndicator {
   final double opacity;
 }
 
-/// Demonstrates a page swipe on a [PageController] by actually turning the
+/// Demonstrates a page swipe on a `PageView` controller by actually turning the
 /// page — one full page in the demonstrated direction, a short hold, then a
 /// full turn back to the exact offset the user was reading.
 ///
@@ -90,7 +90,7 @@ class PageSwipeDemoIndicator {
 ///
 /// ```dart
 /// final _swipeDemo = PageSwipeDemo(
-///   pageController: _pageController,
+///   pageController: _pageController, // any PageView scroll controller
 ///   vsync: this, // State with TickerProviderStateMixin
 /// );
 ///
@@ -117,8 +117,12 @@ class PageSwipeDemo {
     this.curve = Curves.easeInOutCubic,
   }) : _ctrl = AnimationController(vsync: vsync);
 
-  /// The controller of the `PageView` to demonstrate on.
-  final PageController pageController;
+  /// The controller of the `PageView` to demonstrate on. Typed as
+  /// [ScrollController] (the demo only needs `hasClients`, `position` and
+  /// `jumpTo`), so controller variants that do not extend [PageController]
+  /// — e.g. `PreloadPageController` from package:preload_page_view — work
+  /// too; a plain [PageController] remains valid.
+  final ScrollController pageController;
 
   /// Pause with the page still before the turn starts. The step that
   /// triggered the demonstration has just appeared — its card is sliding

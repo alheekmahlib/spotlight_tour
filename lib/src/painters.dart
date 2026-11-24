@@ -13,8 +13,16 @@ class SpotlightPainter extends CustomPainter {
     required this.borderWidth,
     required this.glowSigma,
     required this.scrimOpacity,
+    this.glowColor,
+    this.glowOpacity = 0.55,
     this.tapThroughTarget = false,
   });
+
+  /// Glow colour; defaults to [borderColor].
+  final Color? glowColor;
+
+  /// Opacity (0..1) of the glow.
+  final double glowOpacity;
 
   final Color scrimColor;
   final Color borderColor;
@@ -62,7 +70,8 @@ class SpotlightPainter extends CustomPainter {
       // it entirely (see SpotlightTourTheme.glowSigma).
       if (glowSigma > 0) {
         final glowPaint = Paint()
-          ..color = borderColor.withValues(alpha: 0.55 * scrimOpacity)
+          ..color = (glowColor ?? borderColor)
+              .withValues(alpha: glowOpacity * scrimOpacity)
           ..style = PaintingStyle.stroke
           ..strokeWidth = borderWidth
           ..maskFilter = MaskFilter.blur(BlurStyle.normal, glowSigma);
@@ -84,6 +93,8 @@ class SpotlightPainter extends CustomPainter {
       !identical(oldDelegate.targetPath, targetPath) ||
       oldDelegate.borderWidth != borderWidth ||
       oldDelegate.glowSigma != glowSigma ||
+      oldDelegate.glowColor != glowColor ||
+      oldDelegate.glowOpacity != glowOpacity ||
       oldDelegate.scrimOpacity != scrimOpacity ||
       oldDelegate.tapThroughTarget != tapThroughTarget;
 }
@@ -175,7 +186,18 @@ Path steppedContourPath(List<RRect> lines) {
 
 /// The white "tap" orb that grows and fades on top of the highlighted target.
 class PulsePainter extends CustomPainter {
-  const PulsePainter({required this.progress});
+  const PulsePainter({
+    required this.progress,
+    this.color = const Color(0xFFFFFFFF),
+    this.glowColor,
+    this.opacity = 1,
+    this.glowSigma = 10,
+  });
+
+  final Color color;
+  final Color? glowColor;
+  final double opacity;
+  final double glowSigma;
 
   /// 0..1, repeating.
   final double progress;
@@ -188,21 +210,27 @@ class PulsePainter extends CustomPainter {
     for (final phase in const [0.0, 0.5]) {
       final t = (progress + phase) % 1.0;
       final radius = baseRadius * (0.45 + 0.85 * t);
-      final opacity = (1.0 - t) * 0.9;
-      if (opacity <= 0) continue;
-      final glowPaint = Paint()
-        ..color = const Color(0xFFFFFFFF).withValues(alpha: opacity * 0.45)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-      canvas.drawCircle(center, radius, glowPaint);
+      final op = (1.0 - t) * 0.9 * opacity;
+      if (op <= 0) continue;
+      if (glowSigma > 0) {
+        final glowPaint = Paint()
+          ..color = (glowColor ?? color).withValues(alpha: op * 0.45)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, glowSigma);
+        canvas.drawCircle(center, radius, glowPaint);
+      }
       final corePaint = Paint()
-        ..color = const Color(0xFFFFFFFF).withValues(alpha: opacity * 0.85);
+        ..color = color.withValues(alpha: op * 0.85);
       canvas.drawCircle(center, radius * 0.55, corePaint);
     }
   }
 
   @override
   bool shouldRepaint(PulsePainter oldDelegate) =>
-      oldDelegate.progress != progress;
+      oldDelegate.progress != progress ||
+      oldDelegate.color != color ||
+      oldDelegate.glowColor != glowColor ||
+      oldDelegate.opacity != opacity ||
+      oldDelegate.glowSigma != glowSigma;
 }
 
 /// A white orb that glides horizontally across the highlighted target with a
@@ -210,8 +238,14 @@ class PulsePainter extends CustomPainter {
 /// this"). Painted above the cutout but below the card, always inside an
 /// `IgnorePointer`: the real swipe still passes through to the app.
 class SwipePainter extends CustomPainter {
-  const SwipePainter({required this.progress, required this.leftToRight})
-      : syncFraction = null,
+  const SwipePainter({
+    required this.progress,
+    required this.leftToRight,
+    this.color = const Color(0xFFFFFFFF),
+    this.glowColor,
+    this.colorOpacity = 1,
+    this.glowSigma = 10,
+  })  : syncFraction = null,
         syncOpacity = null;
 
   /// Driven directly by a running `PageSwipeDemo` (see
@@ -223,12 +257,21 @@ class SwipePainter extends CustomPainter {
     required double fraction,
     required this.leftToRight,
     required double opacity,
+    this.color = const Color(0xFFFFFFFF),
+    this.glowColor,
+    this.colorOpacity = 1,
+    this.glowSigma = 10,
   })  : progress = 0,
         syncFraction = fraction,
         syncOpacity = opacity;
 
   /// 0..1, repeating.
   final double progress;
+
+  final Color color;
+  final Color? glowColor;
+  final double colorOpacity;
+  final double glowSigma;
 
   /// True to glide from the left edge to the right edge, false for the
   /// opposite direction. In synced mode this is the current leg's
@@ -279,7 +322,7 @@ class SwipePainter extends CustomPainter {
     final fraction =
         syncFraction ?? headFraction(progress, leftToRight: leftToRight);
     final headX = lerpDouble(x0, x1, fraction)!;
-    final opacity = syncOpacity ?? headOpacity(progress);
+    final opacity = (syncOpacity ?? headOpacity(progress)) * colorOpacity;
     if (opacity <= 0) return;
 
     // Short trail behind the head, against the direction of travel.
@@ -288,7 +331,7 @@ class SwipePainter extends CustomPainter {
       final trailOpacity = opacity * (0.34 - 0.09 * k);
       if (trailOpacity <= 0) continue;
       final paint = Paint()
-        ..color = const Color(0xFFFFFFFF).withValues(alpha: trailOpacity);
+        ..color = color.withValues(alpha: trailOpacity);
       canvas.drawCircle(
           Offset(headX + dir * k * headRadius * 1.15, centerY),
           headRadius * (1.0 - 0.16 * k),
@@ -296,12 +339,14 @@ class SwipePainter extends CustomPainter {
     }
 
     // The head: soft glow plus a bright core, like the pulse orb.
-    final glowPaint = Paint()
-      ..color = const Color(0xFFFFFFFF).withValues(alpha: opacity * 0.45)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-    canvas.drawCircle(Offset(headX, centerY), headRadius * 1.6, glowPaint);
+    if (glowSigma > 0) {
+      final glowPaint = Paint()
+        ..color = (glowColor ?? color).withValues(alpha: opacity * 0.45)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, glowSigma);
+      canvas.drawCircle(Offset(headX, centerY), headRadius * 1.6, glowPaint);
+    }
     final corePaint = Paint()
-      ..color = const Color(0xFFFFFFFF).withValues(alpha: opacity * 0.9);
+      ..color = color.withValues(alpha: opacity * 0.9);
     canvas.drawCircle(Offset(headX, centerY), headRadius, corePaint);
   }
 
@@ -310,5 +355,9 @@ class SwipePainter extends CustomPainter {
       oldDelegate.progress != progress ||
       oldDelegate.leftToRight != leftToRight ||
       oldDelegate.syncFraction != syncFraction ||
-      oldDelegate.syncOpacity != syncOpacity;
+      oldDelegate.syncOpacity != syncOpacity ||
+      oldDelegate.color != color ||
+      oldDelegate.glowColor != glowColor ||
+      oldDelegate.colorOpacity != colorOpacity ||
+      oldDelegate.glowSigma != glowSigma;
 }

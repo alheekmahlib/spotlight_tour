@@ -1,3 +1,36 @@
+## 0.8.0
+
+كل شيء مرئي في المكتبة صار قابلاً للتخصيص، عالمياً في `SpotlightTourTheme` ولكل خطوة في `TourStepStyle`. القيم الافتراضية تعطي نفس الشكل السابق تماماً، فلا حاجة لتعديل أي كود موجود.
+
+- **المؤشر (النبض والسحب):** `indicatorColor`, `indicatorGlowColor`, `indicatorOpacity`, `indicatorSizeFactor`, `indicatorMinSize`, `indicatorMaxSize`, `indicatorGlowSigma`.
+- **الإطار والتوهج:** `borderColor` (مستقل عن `accentColor`), `glowColor`, `glowOpacity`.
+- **البطاقة:** `cardBorderColor`, `cardBorderWidth`, `cardShadows`, `titleGap`, `bodyGap`, `actionsGap`, `morphCurve`.
+- **الترويسة:** `dividerColor`, `dividerThickness`, `iconColor`, `iconSize`.
+- **الأزرار:** `buttonColor`, `buttonRadius`, `skipBorderColor`, `skipBorderWidth`, `skipRadius`, `skipPadding`, `previousPadding`.
+- **تلميح التفاعل:** `hintColor`, `hintBorderWidth`, `hintIcon`, `hintStyle`.
+- **نصوص كل خطوة:** `TourStep.nextLabel`, `previousLabel`, `skipLabel`.
+- `SpotlightTourTheme.copyWith` يقبل الآن كل الحقول.
+- اختبارات جديدة (2).
+
+## 0.7.0
+
+ستايل خاص لكل خطوة، مع بقاء ثيم الجولة افتراضياً لما لم يُخصَّص.
+
+- **`TourStep.style` (جديد، `TourStepStyle`):** أي خطوة تقبل الآن ستايلها
+  الخاص: لون التعتيم، خلفية البطاقة، اللون المميز (الإطار والتوهّج والزر
+  والعدّاد)، لون النص فوق اللون المميز، أنماط العنوان والوصف والعدّاد
+  والتخطّي والسابق وزر التأكيد، نصف قطر البطاقة وحشوتها وهامشها، سماكة
+  الإطار، `glowSigma`، المسافة عن الهدف، وارتفاع الزر الرئيسي. كل حقل
+  يُترك `null` يرجع لثيم الجولة، والخطوات بلا `style` تبقى على الثيم كما
+  هي — لا تغيير على الاستخدام الحالي إطلاقاً.
+- **الأنماط النصية تندمج (`TextStyle.merge`):** تمرير
+  `TextStyle(color: Colors.red)` مثلاً يحافظ على عائلة الخط وحجمه ووزنه
+  من الثيم ويغيّر اللون فقط. الألوان والقيم الأخرى تحل محل الثيم عند
+  تحديدها. مدد الحركة وإعدادات النبض تبقى من ثيم الجولة.
+- اختبارات جديدة (5): دمج `applyTo` وعودته للثيم، بطاقة بألوان الخطوة
+  داخل جولة، الرجوع للثيم في الخطوة التالية غير المخصصة، الانتقال بالعكس
+  يعيد ستايل الخطوة السابقة، ودمج نمط نصي جزئي فوق الثيم.
+
 ## 0.6.1
 
 توافق أوسع لعرض قلب الصفحة مع متحكمات PageView البديلة.

@@ -366,6 +366,32 @@ SpotlightTour(
 )
 ```
 
+#### ستايل خاص لكل خطوة (`TourStep.style`)
+
+أي خطوة تقبل `style: TourStepStyle(...)` يخصّص مظهرها هي فقط؛ كل حقل تتركه
+`null` يرجع لثيم الجولة، والخطوات بلا `style` تبقى على الثيم كما هي. الأنماط
+النصية تُدمج فوق أنماط الثيم (`TextStyle.merge`) فيكفي أن تمرّر ما تريد
+تغييره، والألوان والقيم الأخرى تحل محل الثيم عند تحديدها.
+
+```dart
+TourStep(
+  targetKey: audioKey,
+  title: 'المشغل',
+  description: 'استمع للتلاوة من هنا',
+  style: const TourStepStyle(
+    accentColor: Colors.teal,                        // إطار وتوهّج وزر هذه الخطوة
+    cardColor: Color(0xFF0E2A28),                    // خلفية بطاقتها
+    titleStyle: TextStyle(color: Colors.tealAccent), // تندمج فوق نمط العنوان
+    borderWidth: 3,
+  ),
+)
+```
+
+يمكنك تخصيص: `scrimColor`, `cardColor`, `accentColor`, `onAccentColor`,
+أنماط العنوان والوصف والعدّاد والتخطّي والسابق وزر التأكيد، `cardRadius`,
+`cardPadding`, `cardMargin`, `borderWidth`, `glowSigma`, `targetGap`،
+و`primaryButtonHeight`. مدد الحركة وإعدادات النبض تبقى من ثيم الجولة.
+
 ### ملاحظات
 
 - إن لم يظهر الويدجت المستهدف خلال `targetTimeout` (افتراضياً 1.2 ثانية من بدء

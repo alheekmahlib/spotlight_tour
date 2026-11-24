@@ -146,6 +146,15 @@ class _SpotlightTourState extends State<SpotlightTour>
 
   SpotlightTourTheme get _theme => widget.theme ?? SpotlightTourTheme.gold();
 
+  /// The theme in effect for the displayed step: the tour's [theme] with
+  /// the step's own [TourStep.style] applied on top ([TourStepStyle]).
+  /// Durations and motion settings always come from the tour's theme.
+  SpotlightTourTheme get _stepTheme {
+    final steps = widget.controller.steps;
+    if (steps.isEmpty || _displayedIndex >= steps.length) return _theme;
+    return steps[_displayedIndex].style?.applyTo(_theme) ?? _theme;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -764,7 +773,7 @@ class _SpotlightTourState extends State<SpotlightTour>
   }
 
   Widget _buildOverlay(BuildContext overlayContext) {
-    final theme = _theme;
+    final theme = _stepTheme;
     final c = widget.controller;
     final step = c.steps[_displayedIndex];
     final media = MediaQuery.of(overlayContext);
@@ -835,7 +844,9 @@ class _SpotlightTourState extends State<SpotlightTour>
                       child: CustomPaint(
                         painter: SpotlightPainter(
                           scrimColor: theme.scrimColor,
-                          borderColor: theme.accentColor,
+                          borderColor: theme.borderColor ?? theme.accentColor,
+                          glowColor: theme.glowColor,
+                          glowOpacity: theme.glowOpacity,
                           targetPath: path,
                           borderWidth: theme.borderWidth,
                           glowSigma: theme.glowSigma,
@@ -855,8 +866,14 @@ class _SpotlightTourState extends State<SpotlightTour>
                   // to the app on interactive steps.
                   if (rect != null && (!_pulsesDone || step.swipeDemo != null))
                     Builder(builder: (context) {
-                      final side = (rect.outerRect.shortestSide * 0.9)
-                          .clamp(36.0, 110.0);
+                      final side = (rect.outerRect.shortestSide *
+                              theme.indicatorSizeFactor)
+                          .clamp(theme.indicatorMinSize,
+                              theme.indicatorMaxSize);
+                      final ic = theme.indicatorColor ?? const Color(0xFFFFFFFF);
+                      final ig = theme.indicatorGlowColor;
+                      final io = theme.indicatorOpacity;
+                      final isg = theme.indicatorGlowSigma;
                       final center = _pulseCenter(rect, step.pulseAlignment);
                       final swipe = step.indicator != TourIndicator.pulse;
                       final demo = step.swipeDemo;
@@ -872,6 +889,10 @@ class _SpotlightTourState extends State<SpotlightTour>
                                 if (sync != null) {
                                   return CustomPaint(
                                     painter: SwipePainter.synced(
+                                      color: ic,
+                                      glowColor: ig,
+                                      colorOpacity: io,
+                                      glowSigma: isg,
                                       fraction: sync.fraction,
                                       leftToRight: sync.leftToRight,
                                       opacity: sync.opacity,
@@ -885,6 +906,10 @@ class _SpotlightTourState extends State<SpotlightTour>
                                   animation: _pulseCtrl,
                                   builder: (context, _) => CustomPaint(
                                     painter: SwipePainter(
+                                      color: ic,
+                                      glowColor: ig,
+                                      colorOpacity: io,
+                                      glowSigma: isg,
                                       progress: _pulseCtrl.value,
                                       leftToRight: step.indicator ==
                                           TourIndicator.swipeLeftToRight,
@@ -898,11 +923,19 @@ class _SpotlightTourState extends State<SpotlightTour>
                               builder: (context, _) => CustomPaint(
                                 painter: swipe
                                     ? SwipePainter(
+                                        color: ic,
+                                        glowColor: ig,
+                                        colorOpacity: io,
+                                        glowSigma: isg,
                                         progress: _pulseCtrl.value,
                                         leftToRight: step.indicator ==
                                             TourIndicator.swipeLeftToRight,
                                       )
                                     : PulsePainter(
+                                        color: ic,
+                                        glowColor: ig,
+                                        opacity: io,
+                                        glowSigma: isg,
                                         progress: _pulseCtrl.value),
                               ),
                             );
@@ -932,7 +965,7 @@ class _SpotlightTourState extends State<SpotlightTour>
   }
 
   Widget _positionedCard(RRect? rect, MediaQueryData media, Widget card) {
-    final theme = _theme;
+    final theme = _stepTheme;
     final size = media.size;
     final top0 = media.padding.top + 8;
     final bottomLimit = size.height - media.padding.bottom - 8;
@@ -955,7 +988,7 @@ class _SpotlightTourState extends State<SpotlightTour>
 
     return AnimatedPositioned(
       duration: _theme.spotlightMorphDuration,
-      curve: Curves.easeInOutCubic,
+      curve: theme.morphCurve,
       left: 0,
       right: 0,
       top: top,

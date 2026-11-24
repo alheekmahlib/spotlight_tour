@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import 'page_swipe_demo.dart';
+import 'tour_theme.dart';
 
 /// Shape of the spotlight cutout around a target widget.
 enum TourTargetShape {
@@ -86,6 +87,10 @@ class TourStep {
     this.requireInteraction = false,
     this.interactionHint,
     this.targetTimeout,
+    this.style,
+    this.nextLabel,
+    this.previousLabel,
+    this.skipLabel,
   });
 
   /// Key of the widget to highlight. `null` means a centered card with no
@@ -221,6 +226,22 @@ class TourStep {
   /// is true, e.g. "اسحب الصفحة للمتابعة". Defaults to
   /// [TourLabels.interactionHint].
   final String? interactionHint;
+
+  /// Visual overrides for this step only, layered on the tour's theme:
+  /// this step can have its own accent colour, card background, text
+  /// styles, ... while every field left `null` in the style keeps the
+  /// theme's value. See [TourStepStyle].
+  final TourStepStyle? style;
+
+  /// Replaces the primary button text on this step only (the tour's
+  /// `TourLabels` apply when null).
+  final String? nextLabel;
+
+  /// Replaces the Previous button text on this step only.
+  final String? previousLabel;
+
+  /// Replaces the skip pill text on this step only.
+  final String? skipLabel;
 
   /// How long to wait for [targetKey]'s widget to appear and be laid out
   /// before giving up and showing the card without a spotlight. Matters for

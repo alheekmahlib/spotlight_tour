@@ -68,11 +68,17 @@ class TourTooltipCard extends StatelessWidget {
         : isLast
             ? labels.done
             : labels.next;
+    final primaryText = step.nextLabel ?? primaryLabel;
 
     return Container(
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(theme.cardRadius),
+        border: theme.cardBorderColor != null && theme.cardBorderWidth > 0
+            ? Border.all(
+                color: theme.cardBorderColor!, width: theme.cardBorderWidth)
+            : null,
+        boxShadow: theme.cardShadows,
       ),
       padding: theme.cardPadding,
       child: Column(
@@ -83,18 +89,21 @@ class TourTooltipCard extends StatelessWidget {
             Row(
               children: [
                 _SkipPill(
-                    theme: theme, label: labels.skip, onTap: controller.skip),
+                    theme: theme, label: step.skipLabel ?? labels.skip, onTap: controller.skip),
                 if (!_isIntro) ...[
                   Expanded(
                     child: Container(
-                      height: 1,
+                      height: theme.dividerThickness,
                       margin: const EdgeInsetsDirectional.symmetric(
                           horizontal: 12),
-                      color: theme.accentColor.withValues(alpha: 0.4),
+                      color: theme.dividerColor ??
+                          theme.accentColor.withValues(alpha: 0.4),
                     ),
                   ),
                   if (step.icon != null) ...[
-                    Icon(step.icon, size: 15, color: theme.accentColor),
+                    Icon(step.icon,
+                        size: theme.iconSize,
+                        color: theme.iconColor ?? theme.accentColor),
                     const SizedBox(width: 5),
                   ],
                   Text(labels.counter(index + 1, total),
@@ -106,21 +115,21 @@ class TourTooltipCard extends StatelessWidget {
             0.0,
             0.55,
           ),
-          const SizedBox(height: 14),
+          SizedBox(height: theme.titleGap),
           _staggered(
             Text(step.title,
                 style: theme.titleStyle, textAlign: TextAlign.start),
             0.15,
             0.7,
           ),
-          const SizedBox(height: 6),
+          SizedBox(height: theme.bodyGap),
           _staggered(
             Text(step.description,
                 style: theme.bodyStyle, textAlign: TextAlign.start),
             0.3,
             0.85,
           ),
-          const SizedBox(height: 18),
+          SizedBox(height: theme.actionsGap),
           // Rebuilds on controller notifications so the busy state (a step
           // action running, or the transition animation) disables the
           // buttons while the tour moves.
@@ -138,9 +147,8 @@ class TourTooltipCard extends StatelessWidget {
                         onTap: busy ? null : controller.previous,
                         borderRadius: BorderRadius.circular(8),
                         child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 10),
-                          child: Text(labels.previous,
+                          padding: theme.previousPadding,
+                          child: Text(step.previousLabel ?? labels.previous,
                               style: theme.previousStyle),
                         ),
                       ),
@@ -156,11 +164,12 @@ class TourTooltipCard extends StatelessWidget {
                             height: theme.primaryButtonHeight,
                             child: FilledButton(
                               style: FilledButton.styleFrom(
-                                backgroundColor: theme.accentColor,
+                                backgroundColor: theme.buttonColor ?? theme.accentColor,
                                 foregroundColor: theme.onAccentColor,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(
-                                      theme.primaryButtonHeight / 2),
+                                      theme.buttonRadius ??
+                                          theme.primaryButtonHeight / 2),
                                 ),
                               ),
                               onPressed: busy ? null : controller.next,
@@ -173,7 +182,7 @@ class TourTooltipCard extends StatelessWidget {
                                         color: theme.onAccentColor,
                                       ),
                                     )
-                                  : Text(primaryLabel,
+                                  : Text(primaryText,
                                       style: theme.buttonTextStyle),
                             ),
                           ),
@@ -202,23 +211,26 @@ class _InteractionHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hc = theme.hintColor ?? theme.accentColor;
     return Container(
       height: theme.primaryButtonHeight,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         border: Border.all(
-            color: theme.accentColor.withValues(alpha: 0.5), width: 1),
-        borderRadius: BorderRadius.circular(theme.primaryButtonHeight / 2),
+            color: theme.hintColor ?? hc.withValues(alpha: 0.5),
+            width: theme.hintBorderWidth),
+        borderRadius: BorderRadius.circular(
+            theme.buttonRadius ?? theme.primaryButtonHeight / 2),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.touch_app_outlined, size: 16, color: theme.accentColor),
+          Icon(theme.hintIcon, size: 16, color: hc),
           const SizedBox(width: 8),
           Flexible(
             child: Text(
               text,
-              style: theme.bodyStyle.copyWith(color: theme.accentColor),
+              style: theme.hintStyle ?? theme.bodyStyle.copyWith(color: hc),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -239,12 +251,14 @@ class _SkipPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(theme.skipRadius),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        padding: theme.skipPadding,
         decoration: BoxDecoration(
-          border: Border.all(color: theme.accentColor, width: 1),
-          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: theme.skipBorderColor ?? theme.accentColor,
+              width: theme.skipBorderWidth),
+          borderRadius: BorderRadius.circular(theme.skipRadius),
         ),
         child: Text(label, style: theme.skipStyle),
       ),

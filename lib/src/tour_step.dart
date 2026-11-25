@@ -95,7 +95,15 @@ class TourStep {
 
   /// Key of the widget to highlight. `null` means a centered card with no
   /// spotlight (intro / closing step).
-  final GlobalKey? targetKey;
+  ///
+  /// A [GlobalKey] is read directly, which requires the tagged widget to be
+  /// mounted exactly once. Any other key ([ValueKey], [ObjectKey]) is looked
+  /// up in the tree below the tour overlay, so it may tag a widget that is
+  /// mounted more than once at the same time — a sheet package that keeps an
+  /// offstage measuring copy of its page, a per-page widget kept alive next
+  /// to the page shown, a control that exists on a route below the current
+  /// one. Of several copies the one the user sees on top is highlighted.
+  final Key? targetKey;
 
   /// Bold title inside the tooltip card.
   final String title;

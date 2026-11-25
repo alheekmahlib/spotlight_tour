@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderParagraph;
+import 'package:flutter/rendering.dart'
+    show RenderIndexedStack, RenderParagraph;
 
 import 'painters.dart';
 import 'page_swipe_demo.dart';
@@ -542,12 +543,19 @@ class _SpotlightTourState extends State<SpotlightTour>
   _SpotTarget? _resolveTarget(TourStep? step) {
     final key = step?.targetKey;
     if (step == null || key == null) return null;
-    final targetContext = key.currentContext;
-    if (targetContext == null) return null;
-    final box = targetContext.findRenderObject() as RenderBox?;
     final overlayBox =
         Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize || overlayBox == null) return null;
+    if (overlayBox == null) return null;
+    final box = switch (key) {
+      GlobalKey() => key.currentContext?.findRenderObject() as RenderBox?,
+      _ => _findVisibleCopy(key, overlayBox),
+    };
+    if (box == null || !box.hasSize) return null;
+    final painted = _paintedBounds(box, overlayBox);
+    // A target that never got a finite position (a page kept alive in a
+    // viewport without a size) must not reach the canvas: the engine
+    // rejects a rect holding NaN.
+    if (!painted.isFinite) return null;
 
     final bounds = Offset.zero & overlayBox.size;
     final radius = Radius.circular(step.borderRadius ?? 16);
@@ -559,8 +567,7 @@ class _SpotlightTourState extends State<SpotlightTour>
       // nothing (e.g. empty selection).
     }
 
-    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlayBox);
-    var rect = topLeft & box.size;
+    var rect = painted;
     rect = step.targetPadding.inflateRect(rect);
     rect = rect.intersect(bounds);
     if (rect.isEmpty) return null;
@@ -574,6 +581,96 @@ class _SpotlightTourState extends State<SpotlightTour>
     }
     final r = RRect.fromRectAndRadius(rect, radius);
     return _SpotTarget(bounds: r, lines: [r]);
+  }
+
+  /// [box]'s bounds in the overlay's coordinates, with every transform
+  /// between the two applied. A sheet sliding in, or a [FittedBox] scaling a
+  /// row of buttons down, changes where and how large a target is painted;
+  /// its raw layout size would overstate it.
+  Rect _paintedBounds(RenderBox box, RenderBox overlayBox) =>
+      MatrixUtils.transformRect(
+          box.getTransformTo(overlayBox), Offset.zero & box.size);
+
+  /// The widget tagged with a plain (non-[GlobalKey]) [key]: the last copy
+  /// under the tour's overlay that is on screen.
+  ///
+  /// A plain key may tag several mounted widgets at once — a sheet package
+  /// keeping an offstage measuring copy of its page, a per-page widget kept
+  /// alive next to the page shown, a control that also exists on a route
+  /// below the current one — which a [GlobalKey] cannot. The tree is walked
+  /// in child order, so the last visible copy is the one the user sees on
+  /// top.
+  RenderBox? _findVisibleCopy(Key key, RenderBox overlayBox) {
+    RenderBox? found;
+    void visit(Element element) {
+      if (element.widget.key == key) {
+        final box = element.renderObject;
+        if (!_hasOffstageAncestor(element) &&
+            box is RenderBox &&
+            _isOnScreen(box, overlayBox)) {
+          found = box;
+        }
+      }
+      element.visitChildElements(visit);
+    }
+
+    Overlay.of(context).context.visitChildElements(visit);
+    return found;
+  }
+
+  /// Whether [element] sits inside an [Offstage] that is off: laid out for
+  /// measurement, never painted. Its render object class is private, so the
+  /// check reads the widget from the element tree.
+  bool _hasOffstageAncestor(Element element) {
+    var offstage = false;
+    element.visitAncestorElements((ancestor) {
+      final widget = ancestor.widget;
+      if (widget is Offstage && widget.offstage) {
+        offstage = true;
+        return false;
+      }
+      return true;
+    });
+    return offstage;
+  }
+
+  /// Whether [box] is painted where the user can see it: laid out, not the
+  /// child an [IndexedStack] hides, and still inside the overlay's edges
+  /// after every clipping ancestor (a viewport, a clip shape) has trimmed it.
+  bool _isOnScreen(RenderBox box, RenderBox overlayBox) {
+    if (!box.attached || !box.hasSize) return false;
+    final painted = _paintedBounds(box, overlayBox);
+    // NaN passes every "is empty" test, so it is checked before anything
+    // else: such a copy is nowhere on screen.
+    if (!painted.isFinite) return false;
+    var visible = painted.intersect(Offset.zero & overlayBox.size);
+    RenderObject child = box;
+    RenderObject? node = box.parent;
+    while (node != null && !identical(node, overlayBox) && !visible.isEmpty) {
+      if (node is RenderIndexedStack &&
+          (child is! RenderBox || _childIndexIn(node, child) != node.index)) {
+        return false;
+      }
+      final clip = node.describeApproximatePaintClip(child);
+      if (clip != null) {
+        visible = visible.intersect(
+            MatrixUtils.transformRect(node.getTransformTo(overlayBox), clip));
+      }
+      child = node;
+      node = node.parent;
+    }
+    return !visible.isEmpty;
+  }
+
+  /// [child]'s position among [stack]'s children, or -1 if it is not one.
+  static int _childIndexIn(RenderIndexedStack stack, RenderBox child) {
+    var index = 0;
+    RenderBox? current = stack.firstChild;
+    while (current != null && !identical(current, child)) {
+      current = stack.childAfter(current);
+      index++;
+    }
+    return current == null ? -1 : index;
   }
 
   /// Builds the stepped contour around [TourStep.textRange] (or the whole

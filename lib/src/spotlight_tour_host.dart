@@ -44,6 +44,10 @@ import 'tour_theme.dart';
 ///   target is found as the page settles.
 /// * Each [GlobalKey] may be attached to exactly one mounted widget — the
 ///   same rule as always; keys are how the tour finds its targets.
+/// * A plain key ([ValueKey]) is looked up in the tree instead, so it may
+///   tag a widget that is mounted more than once (a sheet package's offstage
+///   measuring copy, a per-page widget kept alive next to the page shown);
+///   of several copies the one on top is highlighted.
 /// * Starting a new tour while one is visible replaces it cleanly: the
 ///   running step's [TourStep.onExit] teardown runs (its forward
 ///   [TourStep.onNext] action does not), so a sheet or demo the old step

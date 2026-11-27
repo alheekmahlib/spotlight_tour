@@ -19,6 +19,7 @@ class SpotlightTourTheme {
     this.cardRadius = 20,
     this.cardPadding = const EdgeInsetsDirectional.fromSTEB(20, 16, 20, 16),
     this.cardMargin = const EdgeInsetsDirectional.all(16),
+    this.cardMaxWidth,
     this.borderWidth = 2,
     this.glowSigma = 12,
     this.targetGap = 16,
@@ -88,6 +89,12 @@ class SpotlightTourTheme {
 
   /// Margin between the card and the screen edges.
   final EdgeInsetsDirectional cardMargin;
+
+  /// Maximum width of the tooltip card. `null` (the default) keeps the
+  /// card spanning the screen width minus [cardMargin]; a value caps the
+  /// card's own width (margins excluded) and centers it horizontally, so
+  /// narrow screens still shrink it as before.
+  final double? cardMaxWidth;
 
   /// Stroke width of the highlight border.
   final double borderWidth;
@@ -281,6 +288,7 @@ class SpotlightTourTheme {
     double? cardRadius,
     EdgeInsetsDirectional? cardPadding,
     EdgeInsetsDirectional? cardMargin,
+    double? cardMaxWidth,
     double? borderWidth,
     double? glowSigma,
     double? targetGap,
@@ -339,6 +347,7 @@ class SpotlightTourTheme {
       cardRadius: cardRadius ?? this.cardRadius,
       cardPadding: cardPadding ?? this.cardPadding,
       cardMargin: cardMargin ?? this.cardMargin,
+      cardMaxWidth: cardMaxWidth ?? this.cardMaxWidth,
       borderWidth: borderWidth ?? this.borderWidth,
       glowSigma: glowSigma ?? this.glowSigma,
       targetGap: targetGap ?? this.targetGap,
@@ -427,6 +436,7 @@ class TourStepStyle {
     this.cardRadius,
     this.cardPadding,
     this.cardMargin,
+    this.cardMaxWidth,
     this.borderWidth,
     this.glowSigma,
     this.targetGap,
@@ -490,6 +500,10 @@ class TourStepStyle {
   final double? cardRadius;
   final EdgeInsetsDirectional? cardPadding;
   final EdgeInsetsDirectional? cardMargin;
+
+  /// Maximum width of this step's card. Falls back to the theme's
+  /// [SpotlightTourTheme.cardMaxWidth] when null.
+  final double? cardMaxWidth;
 
   /// Stroke width of this step's highlight border.
   final double? borderWidth;
@@ -622,6 +636,7 @@ class TourStepStyle {
       cardRadius: cardRadius ?? base.cardRadius,
       cardPadding: cardPadding ?? base.cardPadding,
       cardMargin: cardMargin ?? base.cardMargin,
+      cardMaxWidth: cardMaxWidth ?? base.cardMaxWidth,
       borderWidth: borderWidth ?? base.borderWidth,
       glowSigma: glowSigma ?? base.glowSigma,
       targetGap: targetGap ?? base.targetGap,

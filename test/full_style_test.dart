@@ -8,10 +8,12 @@ void main() {
     final base = SpotlightTourTheme.gold().copyWith(
       indicatorColor: Colors.green,
       glowOpacity: 0.3,
+      cardMaxWidth: 320,
     );
     final same = const TourStepStyle().applyTo(base);
     expect(same.indicatorColor, Colors.green);
     expect(same.glowOpacity, 0.3);
+    expect(same.cardMaxWidth, 320);
     expect(same.hintIcon, Icons.touch_app_outlined);
     final over = const TourStepStyle(
       indicatorColor: Colors.red,

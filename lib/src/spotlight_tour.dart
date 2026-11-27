@@ -1083,11 +1083,20 @@ class _SpotlightTourState extends State<SpotlightTour>
     }
     top = top.clamp(top0, (bottomLimit - cardH).clamp(top0, bottomLimit));
 
+    // A cardMaxWidth from the theme or the step's style caps the card's own
+    // width (margins excluded) and centers it horizontally: the positioned
+    // box shrinks to that width with symmetric insets instead of spanning
+    // the screen. Narrow screens keep shrinking it as before.
+    final cap = theme.cardMaxWidth;
+    final inset = cap == null
+        ? 0.0
+        : (size.width - theme.cardMargin.horizontal - cap) / 2;
+
     return AnimatedPositioned(
       duration: _theme.spotlightMorphDuration,
       curve: theme.morphCurve,
-      left: 0,
-      right: 0,
+      left: cap == null ? 0 : inset.clamp(0, size.width / 2),
+      right: cap == null ? 0 : inset.clamp(0, size.width / 2),
       top: top,
       child: card,
     );

@@ -414,8 +414,14 @@ TourStep(
 
 يمكنك تخصيص: `scrimColor`, `cardColor`, `accentColor`, `onAccentColor`,
 أنماط العنوان والوصف والعدّاد والتخطّي والسابق وزر التأكيد، `cardRadius`,
-`cardPadding`, `cardMargin`, `borderWidth`, `glowSigma`, `targetGap`،
-و`primaryButtonHeight`. مدد الحركة وإعدادات النبض تبقى من ثيم الجولة.
+`cardPadding`, `cardMargin`, `cardMaxWidth`, `borderWidth`, `glowSigma`,
+`targetGap`، و`primaryButtonHeight`. مدد الحركة وإعدادات النبض تبقى من ثيم الجولة.
+
+`cardMaxWidth` (افتراضياً `null`) يحدّد أقصى عرض للبطاقة: الافتراضي يبقيها
+ممتدة بعرض الشاشة ناقص الهوامش، وعند تحديد قيمة تتقلّص البطاقة إليها
+(هوامش `cardMargin` تبقى خارجها) وتتوسّط أفقياً، والشاشات الضيّقة تظل تقلّصها
+كالسابق. ويسري أيضاً على مستوى الخطوة عبر `TourStepStyle.cardMaxWidth`،
+وينتقل بين السقفين بحركة سلسة عند التنقل بين الخطوات.
 
 ### ملاحظات
 

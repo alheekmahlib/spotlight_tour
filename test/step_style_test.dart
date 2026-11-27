@@ -51,6 +51,8 @@ Container cardContainer(WidgetTester tester, String title) {
   return container;
 }
 
+String _shortCounter(int current, int total) => '$current/$total';
+
 void main() {
   test('applyTo falls back to the base theme for every null field', () {
     final base = SpotlightTourTheme.gold();
@@ -62,6 +64,7 @@ void main() {
     expect(resolved.titleStyle, base.titleStyle);
     expect(resolved.bodyStyle, base.bodyStyle);
     expect(resolved.cardRadius, base.cardRadius);
+    expect(resolved.cardMaxWidth, base.cardMaxWidth);
     expect(resolved.borderWidth, base.borderWidth);
     expect(resolved.glowSigma, base.glowSigma);
     expect(resolved.targetGap, base.targetGap);
@@ -76,6 +79,7 @@ void main() {
     const style = TourStepStyle(
       accentColor: Colors.teal,
       cardColor: Colors.black,
+      cardMaxWidth: 420,
       borderWidth: 3,
       glowSigma: 0,
       titleStyle: TextStyle(color: Colors.tealAccent),
@@ -83,6 +87,7 @@ void main() {
     final resolved = style.applyTo(base);
     expect(resolved.accentColor, Colors.teal);
     expect(resolved.cardColor, Colors.black);
+    expect(resolved.cardMaxWidth, 420);
     expect(resolved.borderWidth, 3);
     expect(resolved.glowSigma, 0);
     // Merged: colour from the style, size/weight from the theme.
@@ -183,5 +188,58 @@ void main() {
 
     expect(buttonColor(tester), Colors.teal);
     expect(borderColor(tester), Colors.teal);
+  });
+
+  testWidgets('cardMaxWidth caps and centers the card', (tester) async {
+    final a = GlobalKey(), b = GlobalKey();
+    final c = SpotlightTourController(steps: [
+      TourStep(targetKey: a, title: 'واسعة', description: 'وصف'),
+      TourStep(
+        targetKey: b,
+        title: 'ضيّقة',
+        description: 'وصف',
+        style: const TourStepStyle(cardMaxWidth: 260),
+      ),
+    ]);
+    await tester.pumpWidget(MaterialApp(
+      home: SpotlightTour(
+        theme: SpotlightTourTheme.gold().copyWith(cardMaxWidth: 420),
+        // Short strings: the Ahem test font renders every glyph as a wide
+        // square, so the default labels would overflow the capped card.
+        labels: const TourLabels(
+            skip: 'تخطي', counter: _shortCounter),
+        controller: c,
+        child: Scaffold(
+          body: Column(children: [
+            Container(key: a, height: 60, color: Colors.blue),
+            const Spacer(),
+            Container(key: b, height: 60, color: Colors.blue),
+          ]),
+        ),
+      ),
+    ));
+    // The tooltip card is the only Container with a coloured BoxDecoration.
+    Finder cardBox() => find.byWidgetPredicate((w) =>
+        w is Container &&
+        w.decoration is BoxDecoration &&
+        (w.decoration as BoxDecoration).color != null);
+
+    c.start();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // Theme-level cap on the 768-wide default surface.
+    expect(tester.getSize(cardBox()).width, 420);
+    expect(tester.getRect(cardBox()).center.dx, moreOrLessEquals(400));
+
+    await tester.tap(find.text('التالي'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    // Let the card's horizontal move to the new cap finish settling.
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // The step's own cap replaces the theme's.
+    expect(tester.getSize(cardBox()).width, 260);
+    expect(tester.getRect(cardBox()).center.dx, moreOrLessEquals(400));
   });
 }
